@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SE618 L8 — Workflow Engines, Failure and Recovery</title>
+<link rel="stylesheet" href="../common/styles.css">
+<link rel="stylesheet" href="../common/print.css">
+</head>
+<body data-course="SE618" data-lecture="Lecture 8 · Sat 14 Nov 2026">
+
+<section class="slide title">
+  <span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
+  <h1>Lecture 8<br>Workflow Engines, DAGs, Failure and Recovery</h1>
+  <p>Anyone can run a DAG when nothing fails. The engineering is in what happens when something does.</p>
+  <div class="meta">Saturday 14 November 2026 · 3 hours<br>Prototype checkpoint due Sat 21 Nov · Engineering Analysis Assignment released today</div>
+  <aside class="notes">
+    <h4>Plan (3h)</h4>
+    <table><tr><td>00:00–00:20</td><td>Part 1 — Scenario: an ML data pipeline and four uncomfortable questions</td></tr>
+    <tr><td>00:20–01:00</td><td>Part 2 — DAG + ready set; task state machine; scheduling, retries, backoff, propagation, cancellation</td></tr>
+    <tr><td>01:00–01:30</td><td>Part 3 — The hard case: success, then crash. Idempotency, durable state, recovery, stale messages, observability</td></tr>
+    <tr><td>01:30–01:40</td><td>Break</td></tr>
+    <tr><td>01:40–02:20</td><td>Part 4 — Design exercise: state model + fault table, then implement the TODOs</td></tr>
+    <tr><td>02:20–02:45</td><td>Part 5 — Validation: invariants and failure injection (measurement is not only nanoseconds)</td></tr>
+    <tr><td>02:45–03:00</td><td>Part 6 — Prototype checkpoint (21 Nov): what counts</td></tr></table>
+    <h4>Prepare</h4>
+    <p><code>Student_Resources/</code>: <code>workflow.hpp</code> (happy path works; TODO 1 stale/duplicate completions, TODO 2 retry/backoff/propagation, TODO 3 recovery), <code>workflow_test.cpp</code> (S1–S9 failure injection; 12 failures on the starter), <code>EXERCISE.md</code>. Instructor: <code>Instructor_Only/Lecture_08/workflow_solution.hpp</code>, <code>state_model_answer.md</code>.</p>
+    <p>Publish the Engineering Analysis Assignment on Classroom today.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Where we are</h2>
+  <div class="cols">
+    <div class="small">
+      <ul>
+        <li>L7: a dependency graph produced a deterministic order and useful diagnostics</li>
+        <li>Today the graph <strong>executes</strong>: tasks run on workers, take minutes, touch external systems, fail, get retried — and the engine itself can crash</li>
+      </ul>
+      <p>The data structures are simple (a DAG, a map of task states, a queue, a log). The difficulty is the <strong>semantics</strong>.</p>
+    </div>
+    <div class="box key">
+      <span class="label">Today's distinctive lesson</span>
+      Failure semantics and recovery behaviour matter as much as successful execution. A workflow engine is defined by what it promises when things go wrong.
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">00:00</span></p>
+    <h4>Ask</h4>
+    <p>"Who has used Airflow, GitHub Actions, Jenkins pipelines, Kubernetes Jobs, or a cron job that calls another cron job?" Most have. "Who has seen one of them run a step twice, or claim a step failed that actually succeeded?" That experience is today's topic.</p>
+  </aside>
+</section>
+
+<!-- ====================== PART 1 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 1 · 00:00–00:20</span>
+  <h1>Scenario: a nightly ML pipeline</h1>
+</section>
+
+<section class="slide">
+  <h2>The workflow</h2>
+  <svg viewBox="0 0 1150 250" aria-label="workflow DAG">
+    <defs><marker id="a8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#14304a"/></marker></defs>
+    <g font-family="Segoe UI, Arial" font-size="17">
+      <rect x="10" y="95" width="130" height="54" rx="8" fill="#e3f1f2" stroke="#0b6e75" stroke-width="2"/><text x="28" y="127">Download</text>
+      <rect x="185" y="95" width="130" height="54" rx="8" fill="#e3f1f2" stroke="#0b6e75" stroke-width="2"/><text x="208" y="127">Validate</text>
+      <rect x="360" y="95" width="130" height="54" rx="8" fill="#e3f1f2" stroke="#0b6e75" stroke-width="2"/><text x="376" y="127">Transform</text>
+      <rect x="540" y="30" width="130" height="54" rx="8" fill="#e3f1f2" stroke="#0b6e75" stroke-width="2"/><text x="558" y="62">Train model</text>
+      <rect x="540" y="160" width="130" height="54" rx="8" fill="#e3f1f2" stroke="#0b6e75" stroke-width="2"/><text x="566" y="192">Profile</text>
+      <rect x="720" y="30" width="130" height="54" rx="8" fill="#e3f1f2" stroke="#0b6e75" stroke-width="2"/><text x="744" y="62">Evaluate</text>
+      <rect x="900" y="30" width="140" height="54" rx="8" fill="#fff4e0" stroke="#9a5b00" stroke-width="2"/><text x="930" y="62">Publish</text>
+      <g stroke="#14304a" stroke-width="2" fill="none"><path d="M140,122 L182,122" marker-end="url(#a8)"/><path d="M315,122 L357,122" marker-end="url(#a8)"/><path d="M490,112 L537,62" marker-end="url(#a8)"/><path d="M490,132 L537,185" marker-end="url(#a8)"/><path d="M670,57 L717,57" marker-end="url(#a8)"/><path d="M850,57 L897,57" marker-end="url(#a8)"/></g>
+      <text x="880" y="118" font-size="15" fill="#9a5b00">posts results to a partner API</text>
+      <text x="880" y="140" font-size="15" fill="#9a5b00">(external side effect, not idempotent)</text>
+      <text x="540" y="240" font-size="15" fill="#46505e">Train and Profile can run in parallel</text>
+    </g>
+  </svg>
+  <div class="box q small"><span class="label">Four questions (pairs, 5 min)</span>
+    <ol class="xsmall">
+      <li>What state must the engine keep?</li>
+      <li>What happens when the <strong>engine</strong> crashes mid-run?</li>
+      <li>What if Publish <strong>succeeds</strong> but the engine crashes before recording it?</li>
+      <li>What if a retry causes a <strong>duplicate side effect</strong>?</li>
+    </ol></div>
+  <aside class="notes">
+    <p><span class="t">00:05</span></p>
+    <h4>Collect answers; do not resolve yet</h4>
+    <ol>
+      <li>Per task: state, attempt count, timestamps, retry schedule, outputs/artifact locations, error of the last attempt. Per workflow: run id, parameters, overall status.</li>
+      <li>If state is only in memory: everything is lost; the run restarts from scratch (expensive: Train may take hours) or, worse, is forgotten. So state must be durable.</li>
+      <li>This is the key question of the day. The engine's record says RUNNING; the world says "done". On restart the engine cannot distinguish "never ran" from "ran and succeeded" from "ran halfway".</li>
+      <li>Duplicates: a second email, a second payment, a second job submission, a duplicate row.</li>
+    </ol>
+    <h4>Teaching point</h4>
+    <p>"Question 3 has no algorithmic answer. It is answered by contract design: idempotency and recovery policy. That is what Part 3 is about."</p>
+  </aside>
+</section>
+
+<!-- ====================== PART 2 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 2 · 00:20–01:00</span>
+  <h1>DAG, ready set and the task state machine</h1>
+</section>
+
+<section class="slide">
+  <h2>From Lecture 7's order to a scheduler</h2>
+  <div class="cols small">
+    <div>
+      <ul>
+        <li>The DAG is validated once (L7 resolver): no cycles, no missing tasks</li>
+        <li>At runtime we do not need a full order — we need the <strong>ready set</strong>: tasks whose dependencies have all <strong>succeeded</strong></li>
+        <li>Kahn's queue, driven by events instead of a loop</li>
+        <li>Workers pull ready tasks; parallelism = size of the ready set, capped by worker slots</li>
+      </ul>
+    </div>
+    <div class="box key">
+      <span class="label">Key design point</span>
+      "Dependency finished" is not enough. Ready means every dependency is <strong>SUCCEEDED</strong>. Failed or skipped dependencies need an explicit policy.
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">00:20</span></p>
+    <h4>Say</h4>
+    <p>"Last week the ready set was a heap inside a loop that ran in microseconds. Today each 'pop' starts a job that may take an hour and may fail, and the heap must survive a crash. Same structure, completely different engineering."</p>
+    <h4>Ask</h4>
+    <p>"Should Profile wait for Train? No dependency, so no. Should Publish run if Profile fails?" Expected: depends on product semantics — here Publish depends only on Evaluate, so yes. Policies like 'fail the whole workflow on any failure' vs 'continue independent branches' are product decisions; our engine continues independent branches.</p>
+    <h4>Deterministic dispatch</h4>
+    <p>Our <code>ready()</code> returns task ids sorted (std::map). Deterministic dispatch makes failure tests reproducible — Lecture 7's point reused.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Task state machine</h2>
+  <svg viewBox="0 0 1150 380" aria-label="task state machine">
+    <defs><marker id="s8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#14304a"/></marker></defs>
+    <g font-family="Segoe UI, Arial" font-size="16">
+      <rect x="10" y="150" width="120" height="48" rx="24" fill="#f5f6f8" stroke="#14304a" stroke-width="2"/><text x="36" y="180">PENDING</text>
+      <rect x="220" y="150" width="120" height="48" rx="24" fill="#e3f1f2" stroke="#0b6e75" stroke-width="2"/><text x="252" y="180">READY</text>
+      <rect x="440" y="150" width="130" height="48" rx="24" fill="#e3f1f2" stroke="#0b6e75" stroke-width="2"/><text x="465" y="180">RUNNING</text>
+      <rect x="690" y="40" width="150" height="48" rx="24" fill="#e8f5ec" stroke="#1f6b33" stroke-width="3"/><text x="715" y="70">SUCCEEDED</text>
+      <rect x="690" y="150" width="150" height="48" rx="24" fill="#fff4e0" stroke="#9a5b00" stroke-width="2"/><text x="720" y="180">RETRYING</text>
+      <rect x="690" y="260" width="150" height="48" rx="24" fill="#fde2e2" stroke="#a3262a" stroke-width="3"/><text x="732" y="290">FAILED</text>
+      <rect x="940" y="260" width="150" height="48" rx="24" fill="#fde2e2" stroke="#a3262a" stroke-width="3"/><text x="973" y="290">SKIPPED</text>
+      <rect x="220" y="300" width="150" height="48" rx="24" fill="#f5f6f8" stroke="#46505e" stroke-width="3"/><text x="245" y="330">CANCELLED</text>
+      <g stroke="#14304a" stroke-width="2" fill="none">
+        <path d="M130,174 L217,174" marker-end="url(#s8)"/><path d="M340,174 L437,174" marker-end="url(#s8)"/>
+        <path d="M570,160 L687,70" marker-end="url(#s8)"/><path d="M570,174 L687,174" marker-end="url(#s8)"/><path d="M570,188 L687,280" marker-end="url(#s8)"/>
+        <path d="M765,150 C700,110 380,110 285,147" marker-end="url(#s8)"/>
+        <path d="M840,284 L937,284" marker-end="url(#s8)" stroke-dasharray="6 4"/>
+      </g>
+      <g font-size="14" fill="#46505e">
+        <text x="128" y="143">deps succeeded</text><text x="352" y="165">start(k)</text>
+        <text x="648" y="126">complete(k)</text><text x="585" y="166">transient fail</text><text x="585" y="250">permanent / exhausted</text>
+        <text x="300" y="100">backoff elapsed (tick)</text><text x="850" y="275">dependents</text>
+        <text x="20" y="360">any non-terminal → CANCELLED on cancel()</text>
+        <text x="880" y="80">bold border = terminal</text>
+      </g>
+    </g>
+  </svg>
+  <aside class="notes">
+    <p><span class="t">00:28</span></p>
+    <h4>Walk through transitions</h4>
+    <ul>
+      <li>PENDING → READY: derived — all dependencies SUCCEEDED.</li>
+      <li>READY → RUNNING: <code>start()</code> assigns attempt k (1, 2, …).</li>
+      <li>RUNNING → SUCCEEDED / RETRYING / FAILED: driven by a message that names the attempt k.</li>
+      <li>RETRYING → READY: when the backoff delay has elapsed (time injected via <code>tick(now)</code>, as in Lecture 1).</li>
+      <li>FAILED causes dependents → SKIPPED (transitively).</li>
+      <li>Terminal states never change. This is an invariant enforced by making every transition explicit.</li>
+    </ul>
+    <h4>Ask</h4>
+    <p>"Why is SKIPPED a different state from FAILED?" Expected: for operators and metrics — 'this task was broken' vs 'this task never had a chance'. Alerting on FAILED only avoids 40 alerts for one root cause. Diagnosability again (L7).</p>
+    <h4>Misconception</h4>
+    <p>"A boolean <code>done</code> flag per task is enough." It cannot express retrying, skipped, cancelled, or 'unknown outcome' — and every missing state becomes an ambiguous bug later.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Retries: limits, backoff, and which failures</h2>
+  <div class="cols small">
+    <div>
+      <table class="tight">
+        <tr><th>Failure</th><th>Retry?</th></tr>
+        <tr><td>Network timeout, 503, worker lost</td><td>Yes — transient</td></tr>
+        <tr><td>Validation error in the data</td><td>No — will fail again</td></tr>
+        <tr><td>Out of memory</td><td>Maybe, on a bigger worker</td></tr>
+        <tr><td>Unknown</td><td>Limited retries, then FAILED</td></tr>
+      </table>
+      <p style="margin-top:10px">Delay before attempt k+1: <code>base · 2^(k−1)</code>, capped, <strong>plus jitter</strong>.</p>
+    </div>
+    <div class="box warn">
+      <span class="label">Why backoff + jitter</span>
+      A dependency outage makes every task fail at once. Immediate, synchronised retries hit the recovering service all together — a retry storm (Lecture 3's stampede). Exponential delays spread the load; random jitter de-synchronises it.
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">00:36</span></p>
+    <h4>Teaching points</h4>
+    <ul>
+      <li>The retry limit is an <strong>invariant</strong>: attempts ≤ max_attempts. It must survive restarts — so attempt counts are durable state, not an in-memory counter.</li>
+      <li>Retrying a permanent error wastes resources and delays the failure signal. Classifying errors is part of the task's contract: the task should say transient vs permanent.</li>
+      <li>Cap the backoff (e.g. 10 minutes); otherwise 2^k grows past the workflow's deadline.</li>
+    </ul>
+    <h4>Ask</h4>
+    <p>"Our engine computes retry_at from the failure event's timestamp. Why not from 'now' at replay time?" Expected: recovery would reset every backoff after a restart, causing an immediate retry storm after an engine restart.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Propagation, skipping and cancellation</h2>
+  <div class="cols small">
+    <div>
+      <ul>
+        <li>Permanent failure of Train → Evaluate, Publish <strong>SKIPPED</strong>; Profile continues</li>
+        <li>Workflow result: FAILED, with the root cause named</li>
+        <li><strong>Cancel</strong>: every non-terminal task → CANCELLED; RUNNING tasks must be told to stop, and may not</li>
+        <li>After cancel, late completion messages must not resurrect tasks</li>
+      </ul>
+    </div>
+    <div class="box q">
+      <span class="label">Ask</span>
+      A user cancels while Publish is RUNNING and the partner API call is in flight. What is the state of the world? What should the UI say?
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">00:45</span></p>
+    <h4>Expected answer</h4>
+    <p>Cancellation is a <em>request</em>. The in-flight call may complete. The honest state is "cancel requested; outcome of Publish unknown". The UI must not claim "nothing was published". Many engines have an explicit CANCELLING state for this; ours goes straight to CANCELLED and ignores later messages, which is simpler but hides the uncertainty — name the trade-off.</p>
+    <h4>Teaching point</h4>
+    <p>"Every state name is a promise to the user. CANCELLED promises nothing will happen any more. Can you keep that promise? If not, the state is lying."</p>
+    <h4>Transition</h4>
+    <p>"That uncertainty — did the side effect happen or not? — is the central problem. Part 3."</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>API boundaries</h2>
+  <pre class="sm"><code>class Workflow {
+public:
+    Workflow(std::vector&lt;TaskSpec&gt; specs, Journal&amp; journal, int64_t backoff_base);
+    std::vector&lt;std::string&gt; ready() const;                  // sorted
+    int  start(const std::string&amp; id, int64_t now);          // READY -&gt; RUNNING, returns attempt k
+    bool complete(const std::string&amp; id, int attempt, int64_t now);
+    bool fail(const std::string&amp; id, int attempt, bool transient, int64_t now);
+    void tick(int64_t now);                                  // RETRYING -&gt; READY after backoff
+    void cancel(int64_t now);
+    static Workflow recover(std::vector&lt;TaskSpec&gt;, Journal&amp;, int64_t now);
+    bool check_invariants() const;
+};</code></pre>
+  <p class="small">Every message carries the <strong>attempt number</strong>. Time is <strong>injected</strong>. State changes go through a <strong>journal</strong>.</p>
+  <aside class="notes">
+    <p><span class="t">00:52</span></p>
+    <h4>Point at three design decisions</h4>
+    <ol>
+      <li><strong>Attempt number in every message</strong> — lets the engine reject a late completion from attempt 1 after attempt 2 started (a "fencing token"). Without it, two attempts can both 'succeed'.</li>
+      <li><strong>Injected time</strong> — backoff is testable without sleeping; replay is deterministic.</li>
+      <li><strong>Journal</strong> — the engine never changes state without first appending the event. Recovery = replay. The same <code>apply()</code> function is used live and during replay, so they cannot diverge.</li>
+    </ol>
+    <h4>Boundary question</h4>
+    <p>"Does the engine execute tasks?" No: it dispatches and receives messages. Execution lives in workers. That boundary is where messages get lost, duplicated and reordered — which is why the API is message-shaped and idempotent-by-attempt.</p>
+  </aside>
+</section>
+
+<!-- ====================== PART 3 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 3 · 01:00–01:30</span>
+  <h1>Success, then crash</h1>
+</section>
+
+<section class="slide">
+  <h2>The critical sequence</h2>
+  <div class="cols wide-l small">
+    <ol>
+      <li>Engine journals <code>Started(Publish, attempt 1)</code></li>
+      <li>Worker calls the partner API — <strong>succeeds</strong></li>
+      <li>Worker sends <code>complete(Publish, 1)</code>…</li>
+      <li>…the engine <strong>crashes</strong> before journaling it</li>
+      <li>Engine restarts, replays the journal: Publish is <strong>RUNNING</strong>, outcome unknown</li>
+    </ol>
+    <div class="box q">
+      <span class="label">Pairs · 5 min</span>
+      What should recovery do? Consider: re-run it · mark it failed · mark it succeeded · ask someone. What does each cost?
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">01:00</span></p>
+    <h4>Expected discussion</h4>
+    <ul>
+      <li><strong>Re-run</strong>: at-least-once. Safe only if Publish is idempotent. Otherwise the partner receives results twice.</li>
+      <li><strong>Mark succeeded</strong>: at-most-once-ish; wrong if the worker actually crashed before calling the API — results never published, silently.</li>
+      <li><strong>Mark failed and alert</strong>: honest; needs a human or a reconciliation step (query the partner: "did you receive run 42?").</li>
+      <li><strong>Ask the external system</strong>: best when possible — requires an API that can answer "did operation X happen?", i.e. an idempotency key or natural key.</li>
+    </ul>
+    <h4>Do not oversimplify</h4>
+    <p>There is no way for the engine alone to know. Exactly-once <em>delivery</em> across a crash boundary is not achievable in general; systems achieve exactly-once <em>effects</em> by combining at-least-once execution with idempotent operations (deduplication at the receiver). Our reference engine re-runs idempotent tasks and fails non-idempotent ones with the reason "outcome unknown" (test S7).</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Delivery semantics</h2>
+  <table class="small">
+    <tr><th>Semantics</th><th>Mechanism</th><th>Risk</th></tr>
+    <tr><td>At-most-once</td><td>Record "done" before doing it; never retry</td><td>Lost work</td></tr>
+    <tr><td>At-least-once</td><td>Retry until success is recorded</td><td>Duplicates</td></tr>
+    <tr class="hl"><td>Effectively once</td><td>At-least-once + idempotent operation (dedupe by key)</td><td>Needs the receiver's cooperation</td></tr>
+  </table>
+  <div class="box key small" style="margin-top:14px">The engine chooses a delivery guarantee; each <strong>task</strong> must declare whether it is safe under it. <code>TaskSpec::idempotent</code> is that declaration.</div>
+  <aside class="notes">
+    <p><span class="t">01:08</span></p>
+    <h4>Say</h4>
+    <p>"Most real workflow engines are at-least-once. Their documentation tells you to make tasks idempotent. That sentence moves the hard part to you — so as a designer of tasks, you must know how."</p>
+    <h4>Connect back</h4>
+    <p>Lecture 1's deduplication component (RecentSet / RecentWindow) is exactly the receiver-side dedupe that makes at-least-once safe. The course is coming full circle.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Making side effects idempotent</h2>
+  <table class="small">
+    <tr><th>Side effect</th><th>Duplicate would…</th><th>Idempotency technique</th></tr>
+    <tr><td>Charge a payment</td><td>Charge twice</td><td>Idempotency key = workflow run + task (<strong>not</strong> attempt)</td></tr>
+    <tr><td>Insert a DB row</td><td>Duplicate row</td><td>Unique natural key + upsert</td></tr>
+    <tr><td>Write a file</td><td>Partial or corrupt file on crash</td><td>Write to a temporary name, then atomic rename</td></tr>
+    <tr><td>Submit a job</td><td>Two jobs running</td><td>Deterministic job name; "create if absent"</td></tr>
+    <tr><td>Send an email</td><td>Second email</td><td>Usually no key: outbox table + dedupe, or accept and document it</td></tr>
+  </table>
+  <aside class="notes">
+    <p><span class="t">01:13</span></p>
+    <h4>The attempt-number trap (test S8)</h4>
+    <p>If the idempotency key includes the attempt number, every retry is a <em>new</em> operation to the provider → double charge. The key must identify the logical operation. Test S8 shows the safe version: the gateway sees the same key twice and charges once.</p>
+    <h4>Email</h4>
+    <p>SMTP has no idempotency. Options: record "sent" in the same database transaction that decides to send (outbox pattern) and have a sender deduplicate; or accept rare duplicates and say so. "We might send a duplicate email after a crash" is an acceptable, honest contract for many products — not for a legal notice.</p>
+    <h4>Ask</h4>
+    <p>"Which of these steps in the ML pipeline are naturally idempotent?" Download (overwrite the same file), Transform (deterministic output path), Train (writes a model version — idempotent if the version name is derived from the run id), Publish (not, unless the partner API supports keys).</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Durable state, checkpoints and recovery</h2>
+  <div class="cols small">
+    <div>
+      <ul>
+        <li><strong>Journal first</strong>: append the event, then act. Never act on an unrecorded decision.</li>
+        <li>State = replay(journal). One <code>apply()</code> for live and replay paths.</li>
+        <li><strong>Checkpoint</strong> = snapshot of state + journal position, so replay does not start from day one</li>
+        <li>After replay, RUNNING tasks have <strong>unknown outcome</strong> → policy per task</li>
+        <li>Stale messages: attempt number ≠ current → ignore and count</li>
+      </ul>
+    </div>
+    <div class="box warn">
+      <span class="label">Order matters</span>
+      Journal <code>Started(k)</code> <strong>before</strong> dispatching attempt k. If you dispatch first and crash before journaling, recovery does not even know the task ran: attempt counts lie, and a non-idempotent task is re-run silently.
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">01:18</span></p>
+    <h4>Say</h4>
+    <p>"This is the write-ahead-log idea from databases, applied to orchestration. Lecture 5's index transaction log, Lecture 9's persistent structures and this journal are the same pattern: durable, append-only history from which state is derived."</p>
+    <h4>Invariant</h4>
+    <p>"Restart does not lose required state" becomes a testable property: for any prefix of the journal, recover(prefix) produces a state satisfying the invariants, and for a complete journal it reproduces the live state (test S9).</p>
+    <h4>Real systems</h4>
+    <p>Temporal/Cadence persist an event history per workflow and re-run workflow code deterministically against it; Airflow stores task-instance state in a database and treats tasks without heartbeats as failed ("zombies"). Mention as evidence that these are industry patterns, not classroom inventions.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Observability and audit</h2>
+  <div class="cols small">
+    <div>
+      <h3>Every transition should be visible</h3>
+      <ul>
+        <li>Who/what/when: task, attempt, worker, timestamps, error</li>
+        <li>Counters: retries, ignored stale messages, skipped tasks, unknown outcomes</li>
+        <li>Durations per task and attempt; queue wait vs run time</li>
+      </ul>
+    </div>
+    <div class="box key">
+      <span class="label">The journal is the audit log</span>
+      "Why did Publish run twice on 3 March?" should be answerable from the journal alone: Started(1), crash, recovery, Started(2), Succeeded(2) — and the idempotency key both used.
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">01:25</span></p>
+    <h4>Teaching point</h4>
+    <p>"Our <code>ignored_messages()</code> counter is not decoration. A rising count means workers are timing out and completing late — a signal that the heartbeat timeout is too short, which causes duplicate executions. Observability of the engine's own anomalies is how you find these problems before customers do."</p>
+    <h4>Transition to break</h4>
+    <p>"After the break: design your own failure model, then make the tests pass."</p>
+  </aside>
+</section>
+
+<section class="slide divider">
+  <span class="kicker">01:30–01:40</span>
+  <h1>Break — 10 minutes</h1>
+  <p>Teams sit together · Open <code>Lecture_08/Student_Resources/EXERCISE.md</code></p>
+</section>
+
+<!-- ====================== PART 4 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 4 · 01:40–02:20</span>
+  <h1>Design exercise: the failure model</h1>
+</section>
+
+<section class="slide">
+  <h2>Part A — on paper (teams, 20 min)</h2>
+  <div class="cols small">
+    <div>
+      <ol>
+        <li>State machine for one task: states, triggers, terminal states</li>
+        <li>Exact rule for READY</li>
+        <li>Retry policy: which failures, limit, backoff</li>
+        <li>Propagation when Train fails permanently</li>
+        <li>What is durable, and written <strong>when</strong></li>
+      </ol>
+    </div>
+    <div>
+      <table class="tight xsmall">
+        <tr><th>Injected fault — expected behaviour?</th></tr>
+        <tr><td>Worker crashes while Transform runs</td></tr>
+        <tr><td>Download fails permanently</td></tr>
+        <tr><td>Train fails transiently twice, then succeeds</td></tr>
+        <tr><td>Engine restarts while Download runs</td></tr>
+        <tr><td>Engine restarts while Publish runs</td></tr>
+        <tr><td>Validate's completion message arrives twice</td></tr>
+        <tr><td>Late completion from attempt 1 after attempt 2 started</td></tr>
+      </table>
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">01:40</span></p>
+    <h4>Run it</h4>
+    <p>Teams fill the sheet in <code>EXERCISE.md</code>. At 01:55 pick two teams to present their answer for "engine restarts while Publish runs" — expect disagreement; that is the point.</p>
+    <h4>Model answers</h4>
+    <p>In <code>Instructor_Only/Lecture_08/state_model_answer.md</code>. Short version: worker crash → transient → retry; permanent download failure → everything downstream SKIPPED; Train succeeds on attempt 3 (max 3) with 1× and 2× backoff; restart during Download → re-run as attempt 2 (idempotent); restart during Publish → FAILED "outcome unknown", reconcile; duplicate and stale completions ignored and counted.</p>
+    <h4>Push on</h4>
+    <ul>
+      <li>"How does the engine learn that a worker crashed?" → heartbeats / leases with a timeout. The timeout is a trade-off: too short → duplicates; too long → slow recovery.</li>
+      <li>"Where is the attempt count stored?" If only in memory, the retry limit resets on every restart — an infinite-retry bug.</li>
+    </ul>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Part B — make it pass (pairs, 20 min)</h2>
+  <div class="cols wide-l small">
+    <div>
+      <p><code>workflow.hpp</code>: the happy path works. Complete:</p>
+      <ul>
+        <li><strong>TODO 1</strong> <code>complete()</code>: ignore stale and duplicate completions</li>
+        <li><strong>TODO 2</strong> <code>apply(Failed)</code>: retry with backoff, limit, propagation to SKIPPED</li>
+        <li><strong>TODO 3</strong> <code>recover()</code>: tasks RUNNING at the crash</li>
+      </ul>
+      <p>You are <strong>not</strong> expected to finish every TODO in class. Pick one or two failure cases (e.g. TODO 1, or the retry half of TODO 2), then compare the tests with your Part A table. The full suite is continuation work.</p>
+    </div>
+    <div class="box plain xsmall">
+      <span class="label">Build</span>
+      <code>g++ -std=c++20 -O1 -g workflow_test.cpp</code><br><br>
+      <span class="label">Starter result</span>
+      12 failures across S2–S8. S1 (happy path) and S9 pass — the happy path was never the problem.
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">02:00</span></p>
+    <h4>Expectation (say this at 02:00)</h4>
+    <p>The primary in-class outcomes are the Part A artifacts: state model, transitions, invariants, failure semantics and reasoning about retries and recovery. Coding in 20 minutes: most pairs finish TODO 1 and part of TODO 2. TODO 3 (recovery) usually needs the discussion in Part 5 first. The complete S1–S9 suite is a continuation exercise; it is also good preparation for projects with failure behaviour.</p>
+    <h4>Hints (give progressively)</h4>
+    <ol>
+      <li>TODO 1: compare <code>t.state == Running</code> and <code>attempt == t.attempts</code>; otherwise <code>++ignored_</code> and return false <em>without</em> journaling.</li>
+      <li>TODO 2: <code>if (e.transient &amp;&amp; t.attempts &lt; max)</code> → RETRYING and compute <code>retry_at</code> from <code>e.time</code>; else FAILED + <code>skip_dependents</code>.</li>
+      <li>TODO 3: after replay, loop over tasks still RUNNING; idempotent → READY (check the attempt limit); otherwise <code>fail_now(…, "outcome unknown…")</code>.</li>
+    </ol>
+    <h4>Why TODO 1 must not journal</h4>
+    <p>If ignored messages were journaled as Succeeded, replay would apply them and resurrect the bug after a restart. The journal must contain only accepted transitions.</p>
+    <p>Solution: <code>Instructor_Only/Lecture_08/workflow_solution.hpp</code>.</p>
+  </aside>
+</section>
+
+<!-- ====================== PART 5 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 5 · 02:20–02:45</span>
+  <h1>Validation: invariants and failure injection</h1>
+</section>
+
+<section class="slide">
+  <h2>Invariants of a workflow engine</h2>
+  <div class="cols small">
+    <ol>
+      <li>A task is READY, RUNNING, RETRYING or SUCCEEDED only if all its dependencies SUCCEEDED</li>
+      <li>A PENDING task has at least one dependency not yet SUCCEEDED (promotion is never forgotten)</li>
+      <li>SKIPPED only if some dependency FAILED, SKIPPED or CANCELLED</li>
+      <li>0 ≤ attempts ≤ max_attempts; RUNNING implies attempts ≥ 1</li>
+      <li>Terminal states never change</li>
+      <li>recover(journal) reproduces the live state</li>
+    </ol>
+    <div class="box key">
+      <span class="label">How they are checked</span>
+      <ul class="xsmall">
+        <li>1–4: <code>check_invariants()</code> after every step of every scenario</li>
+        <li>5: all transitions go through <code>apply()</code>; messages for terminal tasks are ignored</li>
+        <li>6: replay test (S9) and crash tests (S6–S8)</li>
+      </ul>
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">02:20</span></p>
+    <h4>Ask</h4>
+    <p>"Which invariant would catch 'task started before its dependency succeeded'?" #1. "Which bug would violate #2?" Forgetting to call <code>promote()</code> after a replayed success — the workflow hangs forever with nothing READY and nothing RUNNING. A hang is the hardest failure to notice; the invariant turns it into a test failure.</p>
+    <h4>Extension</h4>
+    <p>A stronger test: generate random fault sequences (fail/succeed/duplicate/crash at random points), call <code>check_invariants()</code> after each, and after a crash compare recovered state with an independent model. This is property-based testing applied to a state machine.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Failure injection: the test suite is the specification</h2>
+  <table class="small">
+    <tr><th></th><th>Injected fault</th><th>Expected</th></tr>
+    <tr><td>S2</td><td>Transient failure</td><td>RETRYING, backoff respected, attempt 2 succeeds</td></tr>
+    <tr><td>S3</td><td>Three transient failures (max 3)</td><td>FAILED; Evaluate, Publish SKIPPED; Profile SUCCEEDED</td></tr>
+    <tr><td>S4</td><td>Permanent failure</td><td>No retry; dependents SKIPPED</td></tr>
+    <tr><td>S5</td><td>Stale + duplicate completions</td><td>Ignored, counted, state unchanged</td></tr>
+    <tr><td>S6</td><td>Engine crash, idempotent task running</td><td>Replay → READY → attempt 2</td></tr>
+    <tr><td>S7</td><td>Engine crash, non-idempotent task running</td><td>FAILED with recorded reason</td></tr>
+    <tr><td>S8</td><td>Side effect done, crash before record</td><td>Retry with same idempotency key → one charge</td></tr>
+    <tr><td>S9</td><td>Replay of a finished run</td><td>Identical final state</td></tr>
+  </table>
+  <aside class="notes">
+    <p><span class="t">02:28</span></p>
+    <h4>Teaching point: measurement is not only nanoseconds</h4>
+    <p>"In Lectures 2–6 our evidence was mostly timing. Here the evidence is: which faults did we inject, and did the system do what the contract says? A workflow engine that is 2× faster but double-charges customers after a crash is not better. The evidence you owe your reviewers depends on what the component promises."</p>
+    <h4>How to simulate a crash in a unit test</h4>
+    <p>Let the <code>Workflow</code> object go out of scope (all in-memory state lost) and keep only the <code>Journal</code> — the durable part. Then call <code>recover</code>. This is cheap, deterministic crash testing. Real systems add process-kill tests and chaos testing in staging.</p>
+    <h4>Debrief of Part A</h4>
+    <p>Ask teams where their table disagreed with S2–S8. Common disagreement: S7 — some teams re-run Publish. Accept it if they state the assumption ("the partner API deduplicates by run id") — that makes Publish effectively idempotent, and then the spec should say <code>idempotent = true</code>.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>What else would you want to know?</h2>
+  <div class="cols small">
+    <div class="card">
+      <h3>Still not validated</h3>
+      <ul>
+        <li>Crash <em>during</em> a journal append (torn write)</li>
+        <li>Two engine instances running at once (split brain)</li>
+        <li>Clock jumps; time zones in schedules</li>
+        <li>Thousands of workflows: journal size, replay time</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Measurable, when relevant</h3>
+      <ul>
+        <li>Recovery time vs journal length (→ checkpoints)</li>
+        <li>Scheduling latency: READY → RUNNING</li>
+        <li>Duplicate-execution rate under a heartbeat timeout</li>
+      </ul>
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">02:38</span></p>
+    <h4>Say</h4>
+    <p>"Performance measurement comes back, but only where it matters: recovery time grows with journal length — that is why checkpoints exist. That is a benchmark worth running for this component."</p>
+    <h4>Split brain</h4>
+    <p>Two engine instances both think they own a workflow → both dispatch. Standard fix: a lease/lock with fencing tokens (the attempt number is a local version of this). Mention as the bridge to Lecture 11 (concurrency).</p>
+  </aside>
+</section>
+
+<!-- ====================== PART 6 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 6 · 02:45–03:00</span>
+  <h1>Prototype checkpoint · Sat 21 Nov</h1>
+</section>
+
+<section class="slide">
+  <h2>What counts as a meaningful prototype</h2>
+  <div class="cols small">
+    <div>
+      <h3>Should already work</h3>
+      <ul>
+        <li>The public API from your design document, end to end</li>
+        <li>The baseline <strong>and</strong> your main design behind it</li>
+        <li>Build with one command; tests with one command</li>
+        <li>Invariant checks in debug builds / tests</li>
+        <li>At least one differential test against the baseline</li>
+      </ul>
+    </div>
+    <div>
+      <h3>May still be mocked or missing</h3>
+      <ul>
+        <li>Real datasets (synthetic generator acceptable, if justified)</li>
+        <li>Optional features, tuning, compression</li>
+        <li>Full benchmark suite (due 5 Dec)</li>
+      </ul>
+      <div class="box warn xsmall" style="margin-top:10px">Test at least two failure cases now: an invalid input and a boundary case (empty, full, duplicate, missing).</div>
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">02:45</span></p>
+    <h4>Say</h4>
+    <p>"A prototype is not 'the main structure compiles'. It is the thinnest version of the whole system: API, two implementations, tests, one command to run them. From 21 Nov to 5 Dec you will spend your time on evidence, not on plumbing."</p>
+    <h4>Evidence to collect before the checkpoint</h4>
+    <ul>
+      <li>A first rough measurement of baseline vs main design at one size — to check the hypothesis is still worth testing.</li>
+      <li>A list of invariants actually checked in code (not just in the design document).</li>
+      <li>Known bugs and the plan (<code>CHECKPOINT.md</code>, one page).</li>
+    </ul>
+    <h4>Failure cases to test now (tie to today)</h4>
+    <p>Whatever your component, ask "what happens halfway through an operation that fails?" — e.g. an exception during insert (Lecture 1's strong guarantee), a crash during a rebuild, a malformed input file.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Deadlines</h2>
+  <table class="small">
+    <tr><td>Today, Sat 14 Nov</td><td>Individual Engineering Analysis Assignment released on Classroom (due Sat 12 Dec, 23:59 Cairo)</td></tr>
+    <tr class="hl"><td>Sat 21 Nov, 23:59 Cairo</td><td><strong>Working implementation / prototype checkpoint</strong> — tag <code>checkpoint-prototype</code>, repo URL + commit hash on Classroom, <code>CHECKPOINT.md</code></td></tr>
+    <tr><td>Sat 5 Dec, 23:59 Cairo</td><td>Testing + benchmarking checkpoint</td></tr>
+  </table>
+  <p class="small muted" style="margin-top:14px">The analysis must be on a topic different from your own project's main structure.</p>
+  <aside class="notes">
+    <p><span class="t">02:55</span></p>
+    <p>Show the Engineering Analysis Classroom post briefly (scenarios A–D; about 1500–2000 words; 5 marks). Remind students that the rubric rewards alternatives and limitations, not length.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Summary</h2>
+  <ol>
+    <li>A workflow engine is a DAG plus a durable state machine per task; the ready set drives scheduling.</li>
+    <li>Explicit states (RETRYING, SKIPPED, CANCELLED) make failure behaviour specifiable and observable.</li>
+    <li>Retries need limits, error classification, exponential backoff and jitter.</li>
+    <li>After a crash, a running task's outcome is unknown; idempotency decides whether re-running is safe.</li>
+    <li>Journal before acting; derive state by replay; fence messages with attempt numbers.</li>
+    <li>Validate with invariants and injected faults: evidence is not only nanoseconds.</li>
+  </ol>
+  <p class="small muted">Next: Lecture 9 · Sat 21 Nov — Persistent Data Structures and Versioned Systems · <strong>Prototype checkpoint due 21 Nov</strong>.</p>
+  <aside class="notes"><p>Exit question: "Name one operation in your project whose outcome could be unknown after a crash, and how you would make it safe to retry."</p></aside>
+</section>
+
+<script src="../common/slides.js"></script>
+</body>
+</html>

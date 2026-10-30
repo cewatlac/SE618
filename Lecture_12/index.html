@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SE618 L12 — Benchmarking, Profiling and Experimental Methodology</title>
+<link rel="stylesheet" href="../common/styles.css">
+<link rel="stylesheet" href="../common/print.css">
+</head>
+<body data-course="SE618" data-lecture="Lecture 12 · Sat 12 Dec 2026">
+
+<section class="slide title">
+  <span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
+  <h1>Lecture 12<br>Benchmarking, Profiling and Experimental Methodology</h1>
+  <p>A performance claim is an empirical claim. It is only as good as the experiment behind it.</p>
+  <div class="meta">Saturday 12 December 2026 · 3 hours<br><strong style="color:#fff">Individual Engineering Analysis due today, 23:59 Cairo</strong> · Repository freeze Sat 19 Dec, 09:00 Cairo</div>
+  <aside class="notes">
+    <h4>Plan (3h)</h4>
+    <table><tr><td>00:00–00:15</td><td>Part 1 — "B is 10× faster": unmasking a misleading benchmark</td></tr>
+    <tr><td>00:15–00:50</td><td>Part 2 — Experimental design: question, hypothesis, baseline, variables, workloads, statistics, metrics</td></tr>
+    <tr><td>00:50–01:30</td><td>Part 3 — Harness pitfalls (measured) and profiling: guess, then profile</td></tr>
+    <tr><td>01:30–01:40</td><td>Break</td></tr>
+    <tr><td>01:40–02:05</td><td>Part 4 — Critique three flawed benchmark reports</td></tr>
+    <tr><td>02:05–02:20</td><td>Part 5 — Validity, reproducibility, honest reporting</td></tr>
+    <tr><td>02:20–03:00</td><td>Part 6 — Project experiment clinic · Individual Analysis · course synthesis</td></tr></table>
+    <h4>Prepare</h4>
+    <p><code>Student_Resources/</code>: <code>bench_harness.hpp</code> (reusable), <code>pitfalls_demo.cpp</code>, <code>profile_me.cpp</code>, <code>flawed_reports.md</code>, <code>experiment_plan_template.md</code>, <code>EXERCISE.md</code>. Instructor: <code>Instructor_Only/Lecture_12/answers.md</code> (measured outputs, report critiques), <code>profile_me_fixed.cpp</code>.</p>
+    <p>Students should bring their project's benchmark plan/results (the 5 Dec checkpoint). Part 6 depends on it.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Why this lecture comes last</h2>
+  <div class="cols">
+    <div class="small">
+      <p>Every lecture ended with "what the benchmark does not show". Today we make that habit systematic:</p>
+      <div class="flow"><span>measurement</span><span>benchmark</span><span>evidence</span><span>interpretation</span><span class="hl">conclusion</span></div>
+      <p style="margin-top:14px">Each arrow is a place where a claim can outrun its support.</p>
+    </div>
+    <div class="box key">
+      <span class="label">Today's distinctive lesson</span>
+      Performance claims require credible experimental design: a question, a baseline, controlled variables, representative workloads, repetitions, honest statistics, and explicit threats to validity.
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">00:00</span></p>
+    <h4>Define the five words (say them slowly)</h4>
+    <ul>
+      <li><strong>Measurement</strong>: a number from an instrument ("this call took 2.4 ms").</li>
+      <li><strong>Benchmark</strong>: a designed procedure producing measurements under stated conditions.</li>
+      <li><strong>Evidence</strong>: measurements that bear on a specific question, with their uncertainty.</li>
+      <li><strong>Interpretation</strong>: an explanation of the evidence within the conditions tested.</li>
+      <li><strong>Conclusion</strong>: what we are entitled to claim — usually narrower than we want.</li>
+    </ul>
+    <p>"This lecture is partly a research-methods lecture. You will use it in your final repository (freeze in one week), your defense, the final exam's evidence questions — and in any job where someone says 'X is faster'."</p>
+  </aside>
+</section>
+
+<!-- ====================== PART 1 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 1 · 00:00–00:15</span>
+  <h1>"Implementation B is 10× faster"</h1>
+</section>
+
+<section class="slide">
+  <h2>The claim</h2>
+  <div class="cols wide-l small">
+    <div>
+      <p>A pull request replaces the lookup component. Its description:</p>
+      <div class="box plain">
+        <p class="xsmall">"New implementation B is <strong>10× faster</strong> than the old A. Benchmark: A 48 ms, B 4.8 ms. Ship it."</p>
+      </div>
+      <p>Before reading further: what would you ask the author?</p>
+    </div>
+    <div class="box q"><span class="label">Whole class · 3 min</span>Shout out questions. I will reveal what actually happened, one issue at a time.</div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">00:02</span></p>
+    <p>Collect 6–10 questions on the board first. Then reveal the next slide row by row (use B for blackout between reveals if you want suspense). Students usually find 4–5 of the 9 issues; the point is how many remain hidden in an innocent-looking sentence.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>What actually happened</h2>
+  <table class="small">
+    <tr><th>#</th><th>Issue</th><th>Effect on the "10×"</th></tr>
+    <tr><td>1</td><td>A ran on random input; B on already-sorted input</td><td>Different work (our demo: 6.5× from this alone)</td></tr>
+    <tr><td>2</td><td>A built -O0 (debug), B built -O2</td><td>2–10× from flags alone</td></tr>
+    <tr><td>3</td><td>A measured cold (first call), B after warm-up</td><td>Page faults, caches</td></tr>
+    <tr><td>4</td><td>One measurement each</td><td>No spread; could be noise</td></tr>
+    <tr><td>5</td><td>n = 1,000; production n = 50M</td><td>Cache-resident; does not scale</td></tr>
+    <tr><td>6</td><td>B's result was never used</td><td>Compiler may delete the work</td></tr>
+    <tr><td>7</td><td>No baseline against the standard library</td><td>Is A even reasonable?</td></tr>
+    <tr><td>8</td><td>Mean reported; p99 not measured</td><td>Tail may be worse</td></tr>
+    <tr><td>9</td><td>Memory and build time ignored</td><td>B uses 6× the memory</td></tr>
+  </table>
+  <div class="box q small" style="margin-top:8px"><span class="label">Ask</span>What conclusion can we actually defend?</div>
+  <aside class="notes">
+    <p><span class="t">00:08</span></p>
+    <h4>Expected answer</h4>
+    <p>"Almost none. We can say that one run of B on sorted input at n = 1,000 with -O2 took 4.8 ms, and one cold run of A on random input with -O0 took 48 ms. That says nothing about A vs B." The honest status is "no evidence yet", which is different from "B is not faster".</p>
+    <h4>Every row is measured later today</h4>
+    <p>Rows 1, 2, 3, 4 and 6 are reproduced by <code>pitfalls_demo.cpp</code> with real numbers; rows 5 and 9 were measured in Lectures 4, 5 and 11. Say: "None of this is hypothetical; each of these has happened in this course's own data."</p>
+    <h4>Transition</h4>
+    <p>"How do we design an experiment that avoids all nine by construction? Part 2."</p>
+  </aside>
+</section>
+
+<!-- ====================== PART 2 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 2 · 00:15–00:50</span>
+  <h1>Designing the experiment</h1>
+</section>
+
+<section class="slide">
+  <h2>From question to decision</h2>
+  <table class="small">
+    <tr><th>Element</th><th>Example (autocomplete, L4)</th></tr>
+    <tr><td>Engineering question</td><td>Which design meets p99 ≤ 2 ms within 300 MB for 2M suggestions?</td></tr>
+    <tr><td>Hypothesis (falsifiable)</td><td>The sorted array + short-prefix table matches the cached trie's p99 at &lt; 30% of its memory</td></tr>
+    <tr><td>Baseline</td><td>Plain sorted array (simple, obviously correct)</td></tr>
+    <tr><td>Independent variables</td><td>Design; vocabulary size; prefix length distribution</td></tr>
+    <tr><td>Dependent variables (metrics)</td><td>p50/p99 latency; memory; build time</td></tr>
+    <tr><td>Controlled variables</td><td>Machine, compiler + flags, allocator, data set, seeds, warm-up</td></tr>
+    <tr><td>Decision rule</td><td>Choose the hybrid if its p99 ≤ 1.2× the trie's and memory ≤ 0.5×</td></tr>
+  </table>
+  <aside class="notes">
+    <p><span class="t">00:15</span></p>
+    <h4>Say</h4>
+    <p>"Write the decision rule <em>before</em> you see the data. Otherwise every result can be rationalised into the answer you wanted."</p>
+    <h4>Falsifiable vs not</h4>
+    <p>"Our design performs well" cannot fail. "The hybrid's p99 is within 20% of the trie's at 2M suggestions" can. Only the second is a hypothesis.</p>
+    <h4>Baseline quality</h4>
+    <p>A good baseline is simple, correct and <em>reasonable</em>: the standard library, the obvious design, or the current production system. Beating a deliberately weak baseline (a debug build, an O(n²) straw man) proves nothing. Reviewers check baselines first.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Confounders: what else changed?</h2>
+  <div class="cols small">
+    <div>
+      <p>A confounder is anything that differs between conditions besides the variable you are studying.</p>
+      <ul>
+        <li>Different input data or ordering</li>
+        <li>Compiler, flags, library, allocator versions</li>
+        <li>Warm vs cold caches; first run pays setup</li>
+        <li>Background load; CPU frequency (turbo, thermal throttling, power saving)</li>
+        <li>Different machines or dates</li>
+        <li>Measurement order (A always first)</li>
+      </ul>
+    </div>
+    <div class="box key">
+      <span class="label">Controls</span>
+      <ul class="xsmall">
+        <li>Same binary flags, same input files, same seeds</li>
+        <li>Warm-up runs, then interleave A and B (ABAB…)</li>
+        <li>Quiet machine; record CPU governor / power mode</li>
+        <li>Script everything; record the environment automatically</li>
+      </ul>
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">00:22</span></p>
+    <h4>Interleaving</h4>
+    <p>Running all A repetitions and then all B repetitions lets slow drifts (thermal throttling, background tasks starting) bias one design. Interleaving or randomising the order spreads drift over both. Cheap and rarely done.</p>
+    <h4>Laptops</h4>
+    <p>On battery, CPUs scale frequency aggressively; plugged in and "performance mode" gives more stable numbers. Report which. Turbo boost makes the first seconds faster than the rest — longer runs or disabling turbo reduce the effect.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Workloads and scale</h2>
+  <div class="cols small">
+    <div>
+      <h3>Representative vs synthetic</h3>
+      <ul>
+        <li><strong>Traces</strong> (real requests): realistic, may be unavailable or private</li>
+        <li><strong>Synthetic generators</strong>: controllable, reproducible; must be justified (distribution, skew, sizes)</li>
+        <li>Use both where possible: synthetic to explore, trace to confirm</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Scale selection</h3>
+      <ul>
+        <li>Sweep sizes across cache boundaries (L2, LLC, beyond)</li>
+        <li>Include the production size, or explain why you cannot</li>
+        <li>Include adversarial and skewed cases, not only the average</li>
+      </ul>
+    </div>
+  </div>
+  <div class="box warn small" style="margin-top:10px">Course examples where the workload reversed the conclusion: strided keys (L2), scans vs shifting popularity (L3), prefix lengths (L4), update positions (L6), hot keys (L11).</div>
+  <aside class="notes">
+    <p><span class="t">00:28</span></p>
+    <h4>Say</h4>
+    <p>"Look at the warning box. Five times this semester, changing the workload — not the code — reversed the answer. The workload generator is not a detail of your benchmark; it is half of your argument."</p>
+    <h4>Input distributions</h4>
+    <p>Uniform random keys are the most common and least realistic choice. Real access patterns are skewed (Zipf), bursty, and correlated in time. If you use uniform, justify it or add a skewed variant.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Repetitions and summaries</h2>
+  <div class="cols wide-r">
+    <div class="small">
+      <ul>
+        <li>Timing is a <strong>distribution</strong>: repeat (≥ 10–30)</li>
+        <li><strong>Median</strong>: robust to outliers; report it by default</li>
+        <li><strong>Percentiles</strong> (p90, p99): what slow users feel</li>
+        <li><strong>Mean</strong>: sensitive to outliers; needed for throughput/cost sums</li>
+        <li><strong>Spread</strong>: min–max, IQR, or a confidence interval</li>
+      </ul>
+    </div>
+    <pre class="sm nohl"><code>sort 200k  n=30
+  median = 10.54 ms  [95% CI 10.51–10.59]
+  p10 = 10.40   p90 = 10.84
+  min = 10.34   max = 10.98   mean = 10.58
+
+# bench_harness.hpp: summarize(samples)
+# CI = bootstrap of the median (intuitive,
+#      not a formal test)</code></pre>
+  </div>
+  <div class="box key small">If two designs' intervals overlap heavily, you do not have evidence of a difference — collect more data or accept "no measurable difference".</div>
+  <div class="box warn xsmall">A confidence interval describes uncertainty in the observed measurements under the sampling assumptions. It does <strong>not</strong> remove systematic bias from unequal workloads, compiler differences, thermal effects, poor design or an unrepresentative workload.</div>
+  <aside class="notes">
+    <p><span class="t">00:35</span></p>
+    <h4>Confidence intervals, intuitively</h4>
+    <p>"If we repeated the whole experiment many times, intervals built this way would contain the true median about 95% of the time." The bootstrap in <code>bench_harness.hpp</code> resamples your own measurements to estimate how much the median would move. No formula to memorise; the habit is: never report one number without its spread.</p>
+    <h4>What a CI cannot do (say this explicitly)</h4>
+    <p>A narrow interval only says the <em>random</em> variation of this measurement procedure is small. If A was built with -O0 and B with -O2, or B got sorted input, you get a very precise estimate of a meaningless difference. Bootstrap also assumes the runs are roughly independent draws from the same conditions; thermal throttling or a background job drifting over time violates that. Design (Part 2) removes bias; statistics only describe noise.</p>
+    <h4>Tail latency</h4>
+    <p>For services, p99 matters more than the mean: a request that fans out to 100 backends waits for the slowest, so each backend's p99 becomes the user's median. Report tails; they are where contention, GC, rehash pauses (L2) and cache misses (L3) show up.</p>
+    <h4>Outliers</h4>
+    <p>Do not delete outliers silently. Report them, explain them (OS interrupt? first-run effect?), and use robust summaries.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>What to measure</h2>
+  <table class="small">
+    <tr><th>Metric</th><th>When it matters</th><th>Course example</th></tr>
+    <tr><td>Latency (p50, p99)</td><td>Interactive requests</td><td>Autocomplete ≤ 2 ms p99 (L4)</td></tr>
+    <tr><td>Throughput</td><td>Batch, servers under load</td><td>M ops/s vs threads (L11)</td></tr>
+    <tr><td>Memory</td><td>Always; often the binding constraint</td><td>Index 8.6× the text (L5)</td></tr>
+    <tr><td>Build / preprocessing time</td><td>Rebuilds, cold starts</td><td>Index build 64× (L5)</td></tr>
+    <tr><td>Amortised vs worst-case cost</td><td>Pauses, rehash, compaction</td><td>Rehash spikes (L2), compaction (L9)</td></tr>
+    <tr><td>Error rate</td><td>Approximate structures</td><td>Observed FP ± interval (L10)</td></tr>
+    <tr><td>CPU usage</td><td>Cost, shared machines</td><td>Cores busy for a given throughput</td></tr>
+  </table>
+  <aside class="notes">
+    <p><span class="t">00:42</span></p>
+    <h4>Amortisation</h4>
+    <p>A structure that is cheap per query but expensive to build must be judged over its lifetime: build cost ÷ number of queries before the next rebuild. The L5 index costs 720 ms to build at 50k documents; if the data is rebuilt every minute and queried 10 times, the scan wins. If it is queried millions of times, the index wins. The ratio is the argument.</p>
+    <h4>Transition</h4>
+    <p>"Now the traps inside the harness itself."</p>
+  </aside>
+</section>
+
+<!-- ====================== PART 3 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 3 · 00:50–01:30</span>
+  <h1>Harness pitfalls and profiling</h1>
+</section>
+
+<section class="slide">
+  <h2>Pitfalls, measured (<code>pitfalls_demo.cpp</code>)</h2>
+  <table class="small">
+    <tr><th></th><th>Pitfall</th><th>Measured</th></tr>
+    <tr><td>P1</td><td>Result unused → dead-code elimination</td><td>0.000 ms "vs" 6.1 ms for the same loop (-O2)</td></tr>
+    <tr><td>P1'</td><td>-O0 vs -O2</td><td>Same loop ~20 ms at -O0: debug timings are meaningless</td></tr>
+    <tr><td>P2</td><td>Cold first call</td><td>6.9 ms vs 6.0 ms warm (modest here; large for disk/network)</td></tr>
+    <tr><td>P3</td><td>Input too small</td><td>Insertion sort ties std::sort at 16 elements, loses 10× at 4,096</td></tr>
+    <tr><td>P4</td><td>One run</td><td>30 runs span 10.3–11.0 ms</td></tr>
+    <tr><td>P5</td><td>Unequal work</td><td>Same std::sort: 6.5× "faster" on sorted input</td></tr>
+  </table>
+  <p class="xsmall muted">MinGW g++ 15, i7-11800H, one machine. Run it yourself; your numbers will differ, the lessons will not.</p>
+  <aside class="notes">
+    <p><span class="t">00:50</span> Run <code>./pit</code> live (~2 s), then the <code>-O0</code> build.</p>
+    <h4>P1 explained</h4>
+    <p>The compiler proves the sum is never used and deletes the loop. A benchmark that "discovers" 0 ns has measured nothing. Defence: consume results (<code>do_not_optimize</code> in the harness, Google Benchmark's <code>DoNotOptimize</code>), and sanity-check that time scales with n.</p>
+    <h4>The opposite trap</h4>
+    <p>Compilers can also hoist work out of a timed loop (compute once, reuse) if inputs do not change between iterations. Vary inputs or make them opaque.</p>
+    <h4>Timer resolution</h4>
+    <p>For operations below ~1 µs, time a batch and divide (the L5 note about rare-term queries near 1 µs). <code>steady_clock</code>, not <code>system_clock</code> (which can jump).</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Benchmark vs profile</h2>
+  <div class="cols small">
+    <div class="card">
+      <h3>Benchmark</h3>
+      <p>How fast / expensive is the system under workload W?</p>
+      <p class="xsmall">Output: numbers to compare designs or versions.</p>
+    </div>
+    <div class="card">
+      <h3>Profile</h3>
+      <p>Where is the time / memory being spent?</p>
+      <p class="xsmall">Output: a breakdown by function, line, allocation site.</p>
+    </div>
+  </div>
+  <div class="flow" style="margin-top:18px"><span>measure</span><span>profile</span><span>change one thing</span><span class="hl">re-measure</span></div>
+  <ul class="small" style="margin-top:12px">
+    <li><strong>CPU profilers</strong>: sampling (perf, VTune, Visual Studio, gprof's sampling part) — low overhead; instrumentation — exact counts, higher overhead</li>
+    <li><strong>Memory profilers</strong>: heaptrack, Massif, allocation counters (our counting allocator)</li>
+    <li><strong>Flame graphs</strong>: stacks as widths — the widest tower is where time goes</li>
+  </ul>
+  <aside class="notes">
+    <p><span class="t">00:58</span></p>
+    <h4>Measurement overhead</h4>
+    <p>Profilers perturb what they measure: instrumentation adds work to every call (small functions look expensive), and sampling misses short or rare events. Profile to find <em>where</em>; benchmark without the profiler to measure <em>how much</em>.</p>
+    <h4>Flame graph in one sentence</h4>
+    <p>Stack samples are merged; each box is a function, its width is the share of samples containing it, and its children sit on top. Look for wide plateaus near the top: code that is expensive by itself.</p>
+    <h4>Tools on this course's machines</h4>
+    <p>Windows: Visual Studio profiler, VTune, Very Sleepy; MinGW ships <code>gprof</code>. Linux: <code>perf record -g</code> + flame graph scripts, <code>heaptrack</code>, <code>valgrind --tool=massif</code>. The manual phase timers in <code>profile_me.cpp</code> work everywhere.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Activity: guess the bottleneck (15 min)</h2>
+  <div class="cols wide-l small">
+    <div>
+      <p><code>profile_me.cpp</code>: parse 300,000 access-log lines, count per endpoint, sort the endpoints.</p>
+      <ol>
+        <li><strong>Guess</strong> (write it down): which phase dominates, and its share? — generating input · parsing · hash-map updates · sorting</li>
+        <li>Benchmark: <code>./prof</code></li>
+        <li>Profile: <code>-DPHASE_TIMERS</code> (or gprof / perf)</li>
+        <li>Propose one change; what will you re-measure?</li>
+      </ol>
+    </div>
+    <div class="box plain xsmall">
+      <span class="label">Build</span>
+      <code>g++ -std=c++20 -O2 profile_me.cpp -o prof</code><br>
+      <code>g++ -std=c++20 -O2 -DPHASE_TIMERS profile_me.cpp -o prof</code><br>
+      <code>g++ -std=c++20 -O2 -pg profile_me.cpp -o prof &amp;&amp; ./prof &amp;&amp; gprof prof gmon.out | head -30</code>
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">01:05</span></p>
+    <h4>Collect guesses first</h4>
+    <p>Show of hands per phase. Most students pick sorting ("sorting is O(n log n)") or the hash map.</p>
+    <h4>Actual (instructor machine)</h4>
+    <p>Parsing with <code>std::regex</code>: 672 of 679 ms (99%). Sorting 500 endpoints: 0.0 ms — n is 500, not 300,000. Input generation (136 ms) is outside the timed region.</p>
+    <h4>Fix and re-measure</h4>
+    <p><code>Instructor_Only/Lecture_12/profile_me_fixed.cpp</code>: a hand-written parser over <code>std::string_view</code> and heterogeneous hash lookup (no temporary string per line): 25.6 ms, identical output (~26×). Then the profile changes: input generation now dominates the whole program. "Optimisation moves the bottleneck; re-profile after each change."</p>
+    <h4>Teaching points</h4>
+    <ul>
+      <li>Intuition about asymptotic complexity is a poor predictor of where time goes: the O(n log n) step works on n = 500.</li>
+      <li>Library choices (regex engines vary 10–100× across implementations) are performance decisions.</li>
+      <li>Verify the optimised output equals the original — a faster wrong program is not an optimisation.</li>
+    </ul>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Reproducibility checklist</h2>
+  <div class="cols small">
+    <div>
+      <ul>
+        <li><strong>Scripts</strong>: one command regenerates every figure from raw data</li>
+        <li><strong>Raw data</strong> committed (CSV), not only plots</li>
+        <li><strong>Environment</strong> recorded: CPU, cores, OS, compiler + version + flags, allocator, commit hash, seeds, date</li>
+        <li><strong>Inputs</strong>: versioned files or seeded generators</li>
+      </ul>
+    </div>
+    <div>
+      <ul>
+        <li><strong>Visualisation</strong>: axes labelled with units; log scales stated; error bars or distributions, not bare bars</li>
+        <li>Plot the same metric for all designs on one chart</li>
+        <li>Show where the curves cross, not only one size</li>
+      </ul>
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">01:20</span></p>
+    <h4>Say</h4>
+    <p>"Documentation/reproducibility is 2 marks of your project, and it is what lets me trust your 4 benchmarking marks. If I cannot rerun your benchmark from the README, I cannot check your claims."</p>
+    <h4>Chart advice</h4>
+    <p>For scaling experiments, plot throughput vs threads (L11) or latency vs size on a log axis (L4, L5), one line per design, with a band or error bars for the spread. A bar chart of two means with no spread is the weakest possible figure.</p>
+    <h4>Transition to break</h4>
+    <p>"After the break you will be the reviewers."</p>
+  </aside>
+</section>
+
+<section class="slide divider">
+  <span class="kicker">01:30–01:40</span>
+  <h1>Break — 10 minutes</h1>
+  <p>Open <code>flawed_reports.md</code> · Teams: have your project's benchmark plan ready</p>
+</section>
+
+<!-- ====================== PART 4 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 4 · 01:40–02:05</span>
+  <h1>Critique three benchmark reports</h1>
+</section>
+
+<section class="slide">
+  <h2>You are the reviewers (groups, 20 min)</h2>
+  <div class="cols c3 small">
+    <div class="card"><h3>Report 1</h3><p>"Our trie is 40× faster than a sorted array" — 500 words, one query, one run.</p></div>
+    <div class="card"><h3>Report 2</h3><p>"Sharding improves throughput by 3.1×" — one run on a busy laptop, uniform keys.</p></div>
+    <div class="card"><h3>Report 3</h3><p>"LFU reduces latency by 18%" — best of 10 vs one run last week.</p></div>
+  </div>
+  <div class="box q small" style="margin-top:16px"><span class="label">For each report</span>1. What can be concluded? 2. What cannot? 3. How would you redesign the experiment? — then rank the top three problems by how much they could change the conclusion.</div>
+  <aside class="notes">
+    <p><span class="t">01:40</span></p>
+    <h4>Run it</h4>
+    <p>Assign each group one report (every report covered by at least two groups), 12 minutes, then 8 minutes of debrief: one group presents, the other adds.</p>
+    <h4>Key problems (full answers in <code>Instructor_Only/Lecture_12/answers.md</code>)</h4>
+    <ul>
+      <li><strong>R1</strong>: Debug vs Release (unequal compilation), one query/one run near timer resolution, 500 words vs 5M products (cache-resident), memory and build time ignored, no correctness check.</li>
+      <li><strong>R2</strong>: single noisy run, uncontrolled background load, uniform keys vs a skewed production workload (L11: sharding does not help hot keys), unsupported extrapolation to production.</li>
+      <li><strong>R3</strong>: best-of-10 vs single run (cherry-picking), different machines and dates, stable synthetic Zipf favours LFU (L3), hit rate not recorded, mean latency only, "better policy" overgeneralised.</li>
+    </ul>
+    <h4>Debrief line</h4>
+    <p>"Each report contains a real number. None contains evidence for its headline."</p>
+  </aside>
+</section>
+
+<!-- ====================== PART 5 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 5 · 02:05–02:20</span>
+  <h1>Validity and honest reporting</h1>
+</section>
+
+<section class="slide">
+  <h2>Threats to validity</h2>
+  <table class="small">
+    <tr><th>Type</th><th>Question</th><th>Example threat</th></tr>
+    <tr><td>Internal</td><td>Did the design cause the difference?</td><td>Different flags, inputs or machines (confounders)</td></tr>
+    <tr><td>External</td><td>Does the result transfer?</td><td>Synthetic workload, one CPU, small n; <code>shared_mutex</code> 60–400× slower on MinGW only</td></tr>
+    <tr><td>Construct</td><td>Does the metric measure what we care about?</td><td>Mean latency for a user-facing p99 SLO; hit rate for a latency goal</td></tr>
+    <tr><td>Statistical</td><td>Is the difference larger than the noise?</td><td>One run; overlapping intervals</td></tr>
+  </table>
+  <div class="box plain small" style="margin-top:10px">Correlation is not causation: "the new version is faster since we changed the map" — did anything else change in that commit?</div>
+  <aside class="notes">
+    <p><span class="t">02:05</span></p>
+    <h4>Performance portability</h4>
+    <p>Results depend on hardware (cache sizes, cores, prefetchers), OS (scheduler, mutex implementation), compiler, standard library and allocator. The strongest external-validity evidence is the same experiment on a second, different machine. At minimum, state the conditions.</p>
+    <h4>Causation in practice</h4>
+    <p>A "before/after" comparison across a commit that changed five things cannot attribute the gain to one of them. Change one thing at a time, or measure each change separately.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Cherry-picking and negative results</h2>
+  <div class="cols small">
+    <div class="box bad">
+      <span class="label">Cherry-picking</span>
+      <ul class="xsmall">
+        <li>Reporting the best run, the best size, the best workload</li>
+        <li>Dropping configurations where the new design loses</li>
+        <li>Stopping the experiment when the result looks good</li>
+      </ul>
+    </div>
+    <div class="box good">
+      <span class="label">Negative results are results</span>
+      <ul class="xsmall">
+        <li>"The trie did not justify its memory at our scale" is a valid engineering outcome</li>
+        <li>Report where your design loses — it defines when to choose another</li>
+        <li>In this course: full marks are possible for a well-measured negative result</li>
+      </ul>
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">02:12</span></p>
+    <h4>Say</h4>
+    <p>"Every lecture this semester had a design that lost somewhere: the flat map on strided keys, LFU on shifting popularity, the trie on memory, the segment tree on static data, path copying under bulk changes, sharding on hot keys. Those losses were the most useful results we had — they tell you the conditions for choosing."</p>
+    <h4>Pre-registration, lightly</h4>
+    <p>Writing the hypothesis and decision rule before running (Part 2) is the practical defence against cherry-picking. That is why the experiment plan template has a DECISION row.</p>
+  </aside>
+</section>
+
+<!-- ====================== PART 6 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 6 · 02:20–03:00</span>
+  <h1>Project experiment clinic<br>and course synthesis</h1>
+</section>
+
+<section class="slide">
+  <h2>Clinic: fill the plan for your main claim (teams, 25 min)</h2>
+  <div class="cols small">
+    <table class="tight">
+      <tr><td><strong>CLAIM</strong></td><td>What are we trying to show?</td></tr>
+      <tr><td><strong>BASELINE</strong></td><td>Compared with what?</td></tr>
+      <tr><td><strong>WORKLOAD</strong></td><td>Under what conditions?</td></tr>
+      <tr><td><strong>METRICS</strong></td><td>What are we measuring?</td></tr>
+      <tr><td><strong>CONTROLS</strong></td><td>What must remain fixed?</td></tr>
+      <tr><td><strong>REPETITIONS</strong></td><td>How many, how summarised?</td></tr>
+      <tr><td><strong>THREATS</strong></td><td>What could invalidate it?</td></tr>
+      <tr><td><strong>DECISION</strong></td><td>Which result → design A vs B?</td></tr>
+    </table>
+    <div>
+      <div class="box good xsmall"><span class="label">Result</span>"Implementation A had median latency 2.4 ms [2.3–2.5], B 3.1 ms, n = 30."</div>
+      <div class="box key xsmall"><span class="label">Interpretation</span>"Under this workload, A appears preferable because…"</div>
+      <div class="box warn xsmall"><span class="label">Generalisation</span>"We cannot yet claim A is always faster: we did not test…"</div>
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">02:20</span></p>
+    <h4>Run the clinic</h4>
+    <ol>
+      <li>12 min: teams fill <code>experiment_plan_template.md</code> for their main claim, using their 5 Dec checkpoint results.</li>
+      <li>8 min: swap with another team. The reviewer writes (a) the weakest row and (b) one sentence where interpretation or generalisation is mixed into the result.</li>
+      <li>5 min: two teams share their DECISION row.</li>
+    </ol>
+    <h4>What to look for</h4>
+    <ul>
+      <li>Claims that cannot fail.</li>
+      <li>A single workload (especially uniform keys only).</li>
+      <li>Missing environment information and raw data.</li>
+      <li>"Faster" without a percentile and a spread.</li>
+      <li>No statement of what the experiment does not show.</li>
+    </ul>
+    <p>Remind: repository freeze Sat 19 Dec, 09:00 Cairo — one week. Priority for the final week: evidence quality, not new features.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Individual Engineering Analysis — due today, 23:59 Cairo</h2>
+  <div class="cols small">
+    <div>
+      <ul>
+        <li>5 marks · individual · ~1500–2000 words (excluding references, appendices, raw tables)</li>
+        <li>PDF: <code>SE618_&lt;StudentID&gt;_EngineeringAnalysis.pdf</code></li>
+      </ul>
+      <p>Today's methodology maps directly onto the rubric.</p>
+    </div>
+    <table class="tight small">
+      <tr><th>Criterion</th><th class="num">Marks</th></tr>
+      <tr><td>Understanding / problem formulation</td><td class="num">1</td></tr>
+      <tr><td>Alternatives considered</td><td class="num">1</td></tr>
+      <tr><td>Engineering reasoning</td><td class="num">1</td></tr>
+      <tr><td>Evidence / experimental thinking</td><td class="num">1</td></tr>
+      <tr><td>Limitations / critical evaluation</td><td class="num">1</td></tr>
+    </table>
+  </div>
+  <aside class="notes">
+    <p><span class="t">02:45</span></p>
+    <h4>Connect today to the rubric</h4>
+    <ul>
+      <li>"Evidence / experimental thinking": either use evidence with its limits, or design the experiment that would settle the question (independent/dependent variables, baseline, workload, repetitions).</li>
+      <li>"Limitations / critical evaluation": threats to validity — internal, external, construct.</li>
+      <li>Scenario A (the "2.4× faster" flat map) is essentially Part 1 of today's lecture.</li>
+    </ul>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>The backbone of SE618</h2>
+  <div class="cols small">
+    <ol>
+      <li>Define the <strong>workload</strong></li>
+      <li>Define the <strong>constraints</strong></li>
+      <li>Identify <strong>alternatives</strong> (incl. a simple baseline)</li>
+      <li>Specify <strong>contracts</strong></li>
+      <li>Identify <strong>invariants</strong></li>
+      <li><strong>Implement</strong></li>
+    </ol>
+    <ol start="7">
+      <li><strong>Test</strong> correctness (oracles, invariants, fault injection)</li>
+      <li><strong>Design experiments</strong></li>
+      <li>Collect <strong>evidence</strong></li>
+      <li><strong>Interpret</strong> within limitations</li>
+      <li><strong>Decide</strong></li>
+      <li><strong>Revisit</strong> when the workload changes</li>
+    </ol>
+  </div>
+  <div class="box key small">Every lecture was this loop applied to a different structure: L1 dedup · L2 hash maps · L3 caches · L4 tries · L5 indexes · L6 range queries · L7 dependency graphs · L8 workflows · L9 versions · L10 sketches · L11 concurrency · L12 evidence.</div>
+  <aside class="notes">
+    <p><span class="t">02:52</span></p>
+    <h4>Say (closing the teaching part of the course)</h4>
+    <p>"The structures will change over your career; this loop will not. When someone proposes a data structure, ask for step 1 before step 6. When someone shows you a benchmark, ask for steps 8–10. When the traffic doubles or the product changes, go back to step 1 — that is step 12."</p>
+    <h4>Final exam connection</h4>
+    <p>Section B and C questions ask you to run this loop on a system you have not seen: extract the workload and constraints, compare alternatives, state invariants and failure behaviour, and propose the evidence that would decide. The blueprint will be shared before the exam period.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Next</h2>
+  <table class="small">
+    <tr class="hl"><td>Today, Sat 12 Dec, 23:59 Cairo</td><td>Individual Engineering Analysis Assignment</td></tr>
+    <tr class="hl"><td>Sat 19 Dec, 09:00 Cairo</td><td>Final repository + documentation freeze (tag <code>v1.0</code>); defense session 1</td></tr>
+    <tr><td>Sat 26 Dec</td><td>Remaining defenses; course synthesis; final exam preparation</td></tr>
+  </table>
+  <div class="box plain small" style="margin-top:14px"><span class="label">Defense</span>12-minute team presentation/demo from the tagged release + individual viva (~8 min per student). Slots will be published on Classroom.</div>
+  <aside class="notes"><p><span class="t">02:57</span> Slot allocation: check <code>Instructor_Only/Planning_Notes.md</code> (defense capacity depends on the final team count).</p></aside>
+</section>
+
+<script src="../common/slides.js"></script>
+</body>
+</html>

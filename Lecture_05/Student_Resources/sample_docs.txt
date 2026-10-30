@@ -1,0 +1,12 @@
+1|Redis evicts keys using an approximated LRU policy based on random sampling
+2|An LRU cache combines a hash map with a doubly linked list for constant-time updates
+3|Lucene stores an inverted index as immutable segments that are merged in the background
+4|Elasticsearch refreshes the index every second, so new documents are searchable after a delay
+5|A Bloom filter answers membership queries with false positives but no false negatives
+6|Posting lists are sorted by document id so that intersection runs as a linear merge
+7|Tombstones mark deleted entries in open addressing hash tables and in log-structured storage
+8|Stop words such as the and of are often removed before indexing to save space
+9|Stemming maps running and runs to the same term, trading precision for recall
+10|Incremental indexing appends new segments instead of rebuilding the whole index
+11|A cache stampede happens when many requests miss the same expired key at once
+12|Compression of posting lists uses delta encoding of sorted document ids

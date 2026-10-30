@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SE618 L7 — Dependency Graph Engineering</title>
+<link rel="stylesheet" href="../common/styles.css">
+<link rel="stylesheet" href="../common/print.css">
+</head>
+<body data-course="SE618" data-lecture="Lecture 7 · Sat 7 Nov 2026">
+
+<section class="slide title">
+  <span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
+  <h1>Lecture 7<br>Dependency Graph Engineering</h1>
+  <p>"Cycle detected" is correct. It is also a bad product.</p>
+  <div class="meta">Saturday 7 November 2026 · Written midterm 00:00–01:30 · Lecture 01:40–03:00 (80 min)</div>
+  <aside class="notes">
+    <h4>Session structure (fixed)</h4>
+    <table><tr><td>00:00–01:30</td><td>Individual written midterm (paper controlled separately — not in this file)</td></tr>
+    <tr><td>01:30–01:40</td><td>Break</td></tr>
+    <tr><td>01:40–01:50</td><td>Part 1 — Scenario: a deploy blocked by "cycle detected"</td></tr>
+    <tr><td>01:50–02:10</td><td>Part 2 — Representation, Kahn vs DFS, determinism</td></tr>
+    <tr><td>02:10–02:25</td><td>Part 3 — Diagnostics and API: throw, error object, partial result?</td></tr>
+    <tr><td>02:25–02:50</td><td>Part 4 — Activity: decide the behaviour, then fix the resolver</td></tr>
+    <tr><td>02:50–03:00</td><td>Part 5 — Debrief, project connection, deadlines</td></tr></table>
+    <p>This lecture has <strong>80 minutes</strong> of teaching. Students have just sat an exam: keep energy up with short discussions, and do not start before 01:40.</p>
+    <h4>Prepare</h4>
+    <p><code>Student_Resources/</code>: <code>resolver.hpp</code> (improved contract + naive implementation), <code>resolver_test.cpp</code> (fails 8 checks on the naive version), <code>EXERCISE.md</code>. Solution: <code>Instructor_Only/Lecture_07/resolver_solution.hpp</code>.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Today's session</h2>
+  <table>
+    <tr><td>00:00–01:30</td><td><strong>Individual written midterm</strong> (10 marks · 90 minutes · closed book; no notes permitted)</td></tr>
+    <tr><td>01:30–01:40</td><td>Break</td></tr>
+    <tr class="hl"><td>01:40–03:00</td><td>Dependency Graph Engineering</td></tr>
+  </table>
+  <div class="box key small" style="margin-top:20px">
+    <span class="label">Today's distinctive lesson</span>
+    Diagnosability and deterministic behaviour are engineering properties. A graph algorithm becomes a production component only when its output is stable and its failures tell an operator what to fix.
+  </div>
+  <aside class="notes">
+    <p><span class="t">01:40</span> Start the teaching block. Say nothing about the exam content; midterm results come later.</p>
+    <h4>Say</h4>
+    <p>"You all know topological sort. We will not re-teach it. We will ask what it takes for a topological sort to be something a build system or a deployment tool can ship."</p>
+  </aside>
+</section>
+
+<!-- ====================== PART 1 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 1 · 01:40–01:50</span>
+  <h1>A deploy blocked at 02:00</h1>
+</section>
+
+<section class="slide">
+  <h2>The incident</h2>
+  <div class="cols wide-l small">
+    <div>
+      <p>A platform starts ~400 internal services in dependency order (config → secrets → database proxies → caches → APIs → gateways). The order comes from a resolver over service manifests.</p>
+      <p>After a merge, the nightly deploy fails with:</p>
+      <pre class="nohl"><code>ERROR: cycle detected</code></pre>
+      <p>The on-call engineer has 400 manifests, 1,900 edges, and no idea where to look. Also, last week's deploy started services in a <em>different order</em> than the week before, although nothing changed.</p>
+    </div>
+    <div class="box q"><span class="label">Ask</span>
+      List everything the resolver <em>should</em> have told the engineer. What would make the order change between runs?</div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">01:42</span></p>
+    <h4>Expected answers</h4>
+    <ul>
+      <li>Which services are on the cycle, in order: <code>auth-api → session-cache → auth-api</code>.</li>
+      <li>Which edge was added recently (the manifest file and line that declared it).</li>
+      <li>Which services could still be started (partial result) — maybe 390 of 400 are fine.</li>
+      <li>Other problems in the same run: a dependency on a service that does not exist, a service that depends on itself.</li>
+      <li>Order changes: iteration over a hash map/set, parallel discovery of manifests, file-system listing order — all "unspecified" orders leaking into output.</li>
+    </ul>
+    <h4>Teaching point</h4>
+    <p>"The algorithm was correct. The product failed twice: it was not diagnosable and not deterministic. Both are properties we can specify, test and implement."</p>
+  </aside>
+</section>
+
+<!-- ====================== PART 2 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 2 · 01:50–02:10</span>
+  <h1>Representation, algorithm, determinism</h1>
+</section>
+
+<section class="slide">
+  <h2>Representation: what the graph must carry</h2>
+  <div class="cols small">
+    <div>
+      <ul>
+        <li><strong>Adjacency list</strong> <code>name → deps</code>: what does X need?</li>
+        <li><strong>Reverse edges</strong> <code>name → dependents</code>: who is affected if X changes or fails? (Kahn needs them; so does impact analysis)</li>
+        <li><strong>Node metadata</strong>: declared where (file, line), version, owner</li>
+        <li><strong>Edge metadata</strong>: why (runtime / build / optional), version constraint</li>
+      </ul>
+    </div>
+    <div class="box key">
+      <span class="label">Rule of thumb</span>
+      Store what the <strong>error message</strong> will need. A cycle report without file/line provenance sends the engineer back to grep.
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">01:50</span></p>
+    <h4>Say</h4>
+    <p>"Representation is chosen for the operations — and diagnostics are operations. If you will ever print 'declared in services/auth/manifest.yaml:14', you must keep that data from parsing onwards."</p>
+    <h4>Ask</h4>
+    <p>"Which queries does a deployment tool need besides an order?" Expected: 'what depends on X' (reverse edges, for restarts and blast radius), 'why is X in the build' (a path from a root to X), 'what changed since last run' (diff of stable outputs — needs determinism).</p>
+    <h4>Duplicate edges</h4>
+    <p>Manifests often list a dependency twice (copy-paste, merge). Harmless for correctness if deduplicated, but it inflates in-degree counts in Kahn if not — a real bug source. Treat it as a warning, not an error.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Kahn vs DFS, as engineering choices</h2>
+  <table class="small">
+    <tr><th>Property</th><th>Kahn (in-degree queue)</th><th>DFS (post-order)</th></tr>
+    <tr><td>Deterministic order</td><td>Easy: a min-heap of ready names</td><td>Depends on visit order; must sort roots and neighbours</td></tr>
+    <tr><td>Partial result on error</td><td>Natural: everything emitted is valid</td><td>Must be assembled separately</td></tr>
+    <tr><td>Cycle <em>path</em></td><td>Not directly; leftover nodes = cycles + downstream</td><td>Natural: the recursion stack holds the path</td></tr>
+    <tr><td>Parallel scheduling</td><td>The ready set = what can run now (L8)</td><td>Not directly</td></tr>
+    <tr><td>Stack depth</td><td>Iterative</td><td>Recursion depth = longest chain (risk)</td></tr>
+  </table>
+  <div class="box plain small" style="margin-top:10px">Production answer: <strong>Kahn for the order</strong>, <strong>DFS on the leftovers for the explanation</strong>.</div>
+  <aside class="notes">
+    <p><span class="t">01:57</span></p>
+    <h4>Say</h4>
+    <p>"Same asymptotic cost, O(V + E). The difference is in engineering properties. Kahn gives you determinism, partial results and the ready set for free; DFS gives you the cycle path. So use both: that is exactly what the reference solution does."</p>
+    <h4>Leftover nodes</h4>
+    <p>After Kahn stops, unemitted nodes are either on a cycle or downstream of one (or downstream of a missing dependency). Reporting all leftovers as 'the cycle' is a common and confusing bug: 3 services on a cycle plus 40 downstream look like a 43-node cycle. Run DFS restricted to the leftovers to extract the actual cycles.</p>
+    <h4>Recursion depth</h4>
+    <p>A chain of 100,000 packages (generated code, long migration chains) overflows a recursive DFS on a default 1 MB stack. Iterative DFS or Kahn avoids it. Mention; do not dwell.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Deterministic ordering is a requirement</h2>
+  <div class="cols small">
+    <div>
+      <p>Many valid topological orders exist. Pick <strong>one, by rule</strong>:</p>
+      <pre class="sm"><code>std::priority_queue&lt;std::string,
+    std::vector&lt;std::string&gt;,
+    std::greater&lt;&gt;&gt; ready;       // smallest name first
+for (auto&amp; [n, w] : waiting)       // std::map: sorted
+    if (w == 0) ready.push(n);
+while (!ready.empty()) {
+    auto n = ready.top(); ready.pop();
+    order.push_back(n);
+    for (auto&amp; m : dependents[n])
+        if (--waiting[m] == 0) ready.push(m);
+}</code></pre>
+    </div>
+    <div class="box key">
+      <span class="label">Why it matters</span>
+      <ul class="xsmall">
+        <li>Reproducible builds and cache keys</li>
+        <li>Diffable output: "what changed since yesterday?"</li>
+        <li>Debuggable: a failure can be replayed</li>
+        <li>Tests can assert exact output</li>
+      </ul>
+      Cost: O(log V) per node for the heap. Tie-break rule becomes part of the contract.
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">02:03</span></p>
+    <h4>Sources of nondeterminism to name</h4>
+    <p><code>unordered_map</code>/<code>unordered_set</code> iteration (depends on insertion order, bucket count, library version, and in some languages on a per-process random seed); directory listing order; parallel discovery; pointer addresses used as keys. Our naive resolver iterates an <code>unordered_map</code>: the test that shuffles the input catches it.</p>
+    <h4>Ask</h4>
+    <p>"Lexicographic is one rule. What else could be a sensible tie-break?" Expected: declaration order (stable with respect to input — but then input order matters); priority/criticality; 'shortest first'. Any rule is fine if it is <em>specified</em> and does not depend on incidental state.</p>
+    <h4>Transition</h4>
+    <p>"Now the other half: what the resolver says when the graph is broken."</p>
+  </aside>
+</section>
+
+<!-- ====================== PART 3 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 3 · 02:10–02:25</span>
+  <h1>Diagnostics and the API</h1>
+</section>
+
+<section class="slide">
+  <h2>Correct vs useful</h2>
+  <div class="cols small">
+    <div class="box bad">
+      <span class="label">Algorithmically correct</span>
+      <pre class="nohl"><code>ERROR: cycle detected</code></pre>
+    </div>
+    <div class="box good">
+      <span class="label">Operationally useful</span>
+      <pre class="nohl"><code>ERROR dependency cycle:
+  auth-api -&gt; session-cache -&gt; auth-api
+  auth-api      declared services/auth.yaml:14
+  session-cache declared services/cache.yaml:9
+ERROR 'jobs' depends on unknown package 'queue'
+WARN  'api' lists 'db' more than once (ignored)
+Resolved 391 of 400 services; 9 blocked (listed)</code></pre>
+    </div>
+  </div>
+  <p class="small">Useful diagnostics are: <strong>specific</strong> (the path), <strong>located</strong> (file/line), <strong>complete</strong> (all problems in one run), <strong>stable</strong> (same order every time), <strong>machine-readable</strong> (a kind code, not only text).</p>
+  <aside class="notes">
+    <p><span class="t">02:10</span></p>
+    <h4>Say</h4>
+    <p>"Compare the time-to-fix. Left: the engineer bisects commits for an hour. Right: open two files, remove one line. Diagnosability is measured in operator minutes — that is a legitimate engineering metric."</p>
+    <h4>'Complete' matters</h4>
+    <p>A resolver that stops at the first error forces a fix-rerun loop: fix the cycle, rerun, discover the missing package, fix, rerun… Report all independent problems in one run.</p>
+    <h4>Machine-readable</h4>
+    <p>CI systems and IDEs want <code>{kind: Cycle, path: [...]}</code>, not a string to regex. Our <code>Diagnostic</code> has a <code>kind</code>, a <code>node</code>, a <code>path</code> and a <code>message</code>.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Should <code>resolve()</code> throw?</h2>
+  <table class="small">
+    <tr><th>Option</th><th>Good for</th><th>Problem</th></tr>
+    <tr><td>Throw on first problem</td><td>Simple callers that cannot continue</td><td>One problem per run; no partial result; exceptions for expected input problems</td></tr>
+    <tr><td>Return error code / bool</td><td>C APIs</td><td>No detail; easy to ignore</td></tr>
+    <tr><td>Return partial order only</td><td>"Best effort" tools</td><td>Silent: caller may not notice missing packages</td></tr>
+    <tr class="hl"><td>Result = ok + order + diagnostics[]</td><td>Tools, CI, IDEs, humans</td><td>Caller must check <code>ok</code>; more API surface</td></tr>
+  </table>
+  <div class="box q small" style="margin-top:12px"><span class="label">Ask</span>Is a broken manifest an <em>exceptional</em> situation for a dependency resolver?</div>
+  <aside class="notes">
+    <p><span class="t">02:16</span></p>
+    <h4>Expected answer</h4>
+    <p>No. Invalid dependency data is <em>the normal input</em> the resolver exists to check (Lecture 1's heuristic: expected outcomes via return values; exceptions for conditions the caller cannot handle locally). Exceptions remain right for programmer errors (e.g. a null graph) and resource failures.</p>
+    <h4>The contract in <code>resolver.hpp</code></h4>
+    <ol>
+      <li>Dependencies before dependents.</li>
+      <li>Deterministic: smallest ready name first; independent of input order.</li>
+      <li><code>ok == false</code> iff any error; duplicate dependency is a warning.</li>
+      <li>Partial result: every package whose dependencies all resolve.</li>
+      <li>Cycle path starts at the smallest name on the cycle, e.g. a → b → c → a.</li>
+      <li>Diagnostics sorted by (kind, node).</li>
+    </ol>
+    <p>Point 3 prevents the "silent partial result" problem: a caller that ignores diagnostics still sees <code>ok == false</code>. <code>[[nodiscard]]</code> on the result type would make ignoring it a compiler warning.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Invalid graph states and their classification</h2>
+  <svg viewBox="0 0 1150 260">
+    <g font-family="Consolas,monospace" font-size="17">
+      <g><circle cx="80" cy="60" r="30" fill="#e3f1f2" stroke="#0b6e75" stroke-width="2"/><text x="66" y="66">web</text>
+      <circle cx="220" cy="60" r="30" fill="#e3f1f2" stroke="#0b6e75" stroke-width="2"/><text x="206" y="66">api</text>
+      <circle cx="360" cy="60" r="30" fill="#e3f1f2" stroke="#0b6e75" stroke-width="2"/><text x="352" y="66">db</text>
+      <circle cx="220" cy="190" r="30" fill="#fff" stroke="#a3262a" stroke-width="2" stroke-dasharray="6 4"/><text x="198" y="196" fill="#a3262a">cache?</text></g>
+      <g stroke="#14304a" stroke-width="2" fill="none"><path d="M110,60 L188,60" marker-end="url(#a7)"/><path d="M250,52 L328,52" marker-end="url(#a7)"/><path d="M250,68 L328,68" marker-end="url(#a7)" stroke="#9a5b00"/><path d="M220,90 L220,158" marker-end="url(#a7)" stroke="#a3262a"/></g>
+      <g><circle cx="640" cy="60" r="30" fill="#fde2e2" stroke="#a3262a" stroke-width="2"/><text x="634" y="66">a</text>
+      <circle cx="780" cy="60" r="30" fill="#fde2e2" stroke="#a3262a" stroke-width="2"/><text x="774" y="66">b</text>
+      <circle cx="710" cy="180" r="30" fill="#fde2e2" stroke="#a3262a" stroke-width="2"/><text x="704" y="186">c</text>
+      <circle cx="960" cy="120" r="30" fill="#fde2e2" stroke="#a3262a" stroke-width="2"/><text x="942" y="126">auth</text></g>
+      <g stroke="#a3262a" stroke-width="2" fill="none"><path d="M670,60 L748,60" marker-end="url(#a7r)"/><path d="M768,88 L728,152" marker-end="url(#a7r)"/><path d="M690,156 L652,90" marker-end="url(#a7r)"/><path d="M985,100 C1040,60 1040,180 985,140" marker-end="url(#a7r)"/></g>
+      <defs><marker id="a7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#14304a"/></marker><marker id="a7r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#a3262a"/></marker></defs>
+    </g>
+    <g font-family="Segoe UI, Arial" font-size="15" fill="#46505e">
+      <text x="30" y="245">missing dependency (error) · duplicate edge api→db (warning)</text>
+      <text x="600" y="245">cycle a → b → c → a (error)</text><text x="905" y="190">self-dependency (error)</text>
+    </g>
+  </svg>
+  <table class="tight xsmall">
+    <tr><th>State</th><th>Error or warning?</th><th>Blocks</th></tr>
+    <tr><td>Missing dependency · self-dependency · cycle · duplicate package declaration</td><td>Error</td><td>That package and everything downstream</td></tr>
+    <tr><td>Duplicate dependency</td><td>Warning</td><td>Nothing (deduplicate)</td></tr>
+  </table>
+  <aside class="notes">
+    <p><span class="t">02:21</span></p>
+    <h4>Discuss the classification</h4>
+    <ul>
+      <li><strong>Duplicate package declaration</strong>: why an error? Two manifests both define "auth-api" with different dependencies. Silently merging (what the naive resolver does) or picking one hides a real configuration conflict.</li>
+      <li><strong>Missing dependency</strong>: some systems treat it as a warning when the dependency is optional. That requires edge metadata (optional vs required) — the representation slide again.</li>
+      <li>Everything else in the graph continues to resolve: partial results.</li>
+    </ul>
+    <h4>Transition</h4>
+    <p>"You now have the contract. The exercise: decide the exact output for a messy input, then make the naive resolver honour the contract."</p>
+  </aside>
+</section>
+
+<!-- ====================== PART 4 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 4 · 02:25–02:50</span>
+  <h1>Activity: from "cycle" to a diagnosable resolver</h1>
+</section>
+
+<section class="slide">
+  <h2>Activity (pairs, 25 minutes)</h2>
+  <div class="cols wide-l small">
+    <div>
+      <h3>A. Decide (8 min, on paper)</h3>
+      <pre class="sm nohl"><code>web  -&gt; api
+api  -&gt; db, cache, db
+db   -&gt; (none)
+jobs -&gt; queue          # queue undeclared
+auth -&gt; auth
+a -&gt; b,  b -&gt; c,  c -&gt; a
+util -&gt; (none)</code></pre>
+      <p>Write <code>ok</code>, <code>order</code> and every diagnostic.</p>
+    </div>
+    <div>
+      <h3>B. Implement (17 min)</h3>
+      <p>In class, aim for a <strong>subset</strong>: (1) deterministic order, (2) missing-dependency diagnostic, (3) one more diagnostic if time allows. The full test suite is continuation work.</p>
+      <div class="box plain xsmall">The naive version: order depends on hash-map iteration; reports only "cycle detected"; invents missing packages; merges duplicate declarations.</div>
+      <p class="xsmall">After class: make all of <code>resolver_test.cpp</code> pass. Useful for any project with a graph.</p>
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">02:25</span></p>
+    <h4>Expected answer for Part A (reveal at 02:33)</h4>
+    <pre>ok = false
+order = [db, util]
+  (api blocked by missing 'cache' → web blocked; jobs blocked by missing 'queue';
+   auth self-dependency; a, b, c on a cycle)
+diagnostics (sorted by kind, node):
+  MissingDependency  api   [api, cache]
+  MissingDependency  jobs  [jobs, queue]
+  SelfDependency     auth  [auth, auth]
+  Cycle              a     [a, b, c, a]
+  DuplicateDependency api  [api, db]   (warning)</pre>
+    <p>(Verified against the reference solution.) Note that <code>cache</code> is never declared, so <code>api</code> is blocked, and therefore <code>web</code> too. Many students will put <code>api</code> and <code>web</code> in the order: use that to discuss "blocked downstream" and why a partial result must not include packages whose dependencies are unresolved.</p>
+    <h4>Realistic expectation (important)</h4>
+    <p>Students have just finished a 90-minute exam. In ~17 minutes of coding, expect only a meaningful subset: (1) deterministic ordering (replace hash-map iteration with a min-heap/sorted container — makes test 2 pass); (2) the missing-dependency diagnostic with its path (test 3, partially); (3) one more diagnostic (self-dependency is the easiest) if time allows. Cycle-path extraction and partial results are continuation work. Say this explicitly at the start of Part B so nobody feels they failed. The full suite stays as after-class practice; discuss the reference solution next week or post it after class.</p>
+    <h4>Implementation hints (give progressively)</h4>
+    <ol>
+      <li>Use <code>std::map</code>/<code>std::set</code> for everything that is iterated.</li>
+      <li>Validate first (duplicates, self, missing) and mark blocked packages.</li>
+      <li>Kahn with a min-heap over non-blocked packages.</li>
+      <li>DFS over the leftovers only; rotate the cycle to start at its smallest name.</li>
+    </ol>
+    <p>Solution: <code>Instructor_Only/Lecture_07/resolver_solution.hpp</code> (≈ 90 lines).</p>
+  </aside>
+</section>
+
+<!-- ====================== PART 5 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 5 · 02:50–03:00</span>
+  <h1>Debrief and project connection</h1>
+</section>
+
+<section class="slide">
+  <h2>Debrief</h2>
+  <div class="cols small">
+    <div>
+      <ul>
+        <li>Which test failed first on the naive resolver? (Usually: shuffled input → different order.)</li>
+        <li>How did you test "deterministic"? One run cannot show it: shuffle, repeat, compare.</li>
+        <li>Where did you put the tie-break rule — code, docs, tests? It must be all three.</li>
+      </ul>
+    </div>
+    <div class="box key">
+      <span class="label">For your project</span>
+      <ul class="xsmall">
+        <li>Is any output of yours order-dependent on a hash container?</li>
+        <li>What is your worst error message today? Rewrite it with a path and a location.</li>
+        <li>Which invalid inputs do you return as diagnostics, and which do you throw on?</li>
+      </ul>
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">02:50</span></p>
+    <h4>Teaching point to close on</h4>
+    <p>"Determinism and diagnostics are not polish. They decide whether your component can be debugged at 02:00, cached by a build system, and trusted in CI. And they are testable: our test file specifies both."</p>
+    <h4>Connect forward</h4>
+    <p>"Next week the graph starts <em>executing</em>: tasks run, fail, retry, and the engine crashes. The ready set from Kahn becomes a scheduler's run queue."</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Coming up</h2>
+  <table class="small">
+    <tr><td>Sat 14 Nov</td><td>Lecture 8 — Workflow Engines, DAGs, Failure and Recovery · Engineering Analysis Assignment released (due 12 Dec)</td></tr>
+    <tr class="hl"><td>Sat 21 Nov, 23:59 Cairo</td><td><strong>Working implementation / prototype checkpoint</strong>: baseline + main design working end-to-end; tests run with one command</td></tr>
+    <tr><td>Sat 5 Dec</td><td>Testing + benchmarking checkpoint</td></tr>
+  </table>
+  <p class="small muted" style="margin-top:14px">Midterm marks and feedback will be returned in a later session.</p>
+  <aside class="notes">
+    <p><span class="t">02:57</span></p>
+    <p>Say the prototype checkpoint date twice. Teams that have not started implementation after submitting their design document should start this week.</p>
+  </aside>
+</section>
+
+<script src="../common/slides.js"></script>
+</body>
+</html>

@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SE618 L6 — Range Queries and Workload-Driven Design</title>
+<link rel="stylesheet" href="../common/styles.css">
+<link rel="stylesheet" href="../common/print.css">
+</head>
+<body data-course="SE618" data-lecture="Lecture 6 · Sat 31 Oct 2026">
+
+<section class="slide title">
+  <span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
+  <h1>Lecture 6<br>Range Queries and Workload-Driven Design</h1>
+  <p>Do not choose a structure by name. Derive it from the operation profile.</p>
+  <div class="meta">Saturday 31 October 2026 · 3 hours<br><strong style="color:#fff">Architecture / design / API document due today, 23:59 Cairo</strong></div>
+  <aside class="notes">
+    <h4>Plan (3h)</h4>
+    <table><tr><td>00:00–00:20</td><td>Part 1 — Scenario: a metrics dashboard; extract the operation profile</td></tr>
+    <tr><td>00:20–01:00</td><td>Part 2 — Four representations: scan, prefix sums, Fenwick tree, segment tree (+ sparse table)</td></tr>
+    <tr><td>01:00–01:30</td><td>Part 3 — One interface: contract, range semantics, overflow, mutation and concurrency</td></tr>
+    <tr><td>01:30–01:40</td><td>Break</td></tr>
+    <tr><td>01:40–02:10</td><td>Part 4 — Activity: choose a deployment for workloads A–E, on paper</td></tr>
+    <tr><td>02:10–02:40</td><td>Part 5 — Benchmark: when does sophistication pay?</td></tr>
+    <tr><td>02:40–03:00</td><td>Part 6 — Design-document clinic (due tonight) + midterm logistics</td></tr></table>
+    <h4>Prepare</h4>
+    <p><code>Student_Resources/</code>: <code>range_aggregate.hpp</code> (all four implementations — this lecture's activity is choosing, not coding), <code>range_test.cpp</code>, <code>range_bench.cpp</code> (~10–20 s), <code>EXERCISE.md</code>. Model answers: <code>Instructor_Only/Lecture_06/workload_decisions.md</code>.</p>
+    <p>The last 20 minutes are the design-document clinic. Protect them.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Where we are</h2>
+  <div class="cols">
+    <div class="small">
+      <ul>
+        <li>L5: an index is precomputed work, paid for on writes</li>
+        <li>Today: the purest form of that trade — how much to precompute for range aggregates, given how often the data changes</li>
+      </ul>
+      <p>You have all seen Fenwick and segment trees. We will not re-derive them. We will ask when each one is worth deploying — including when none of them is.</p>
+    </div>
+    <div class="box key">
+      <span class="label">Today's distinctive lesson</span>
+      There is no universally best range-query structure. The representation follows from the <strong>query/update ratio, operation types, data size, mutability, memory, latency and required guarantees</strong> — and from the cost of getting it wrong.
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">00:00</span></p>
+    <h4>Ask</h4>
+    <p>"Hands up: who would answer 'segment tree' to any range-query question?" Many will. "By the end of today you should be able to name workloads where that answer is the most expensive choice."</p>
+    <p>Reminder: design document due tonight; clinic at 02:40.</p>
+  </aside>
+</section>
+
+<!-- ====================== PART 1 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 1 · 00:00–00:20</span>
+  <h1>Scenario: a metrics dashboard</h1>
+</section>
+
+<section class="slide">
+  <h2>The scenario</h2>
+  <div class="cols wide-l small">
+    <div>
+      <p>A monitoring service keeps, per metric series, one value per minute for a year: <strong>525,600 buckets</strong> (requests, errors, bytes). 20,000 series.</p>
+      <p>Dashboards ask:</p>
+      <ul>
+        <li>total requests between two times (sum)</li>
+        <li>number of error minutes (count)</li>
+        <li>worst p99 latency in a window (max)</li>
+      </ul>
+      <p>Late events <strong>correct</strong> single buckets; a nightly job occasionally <strong>backfills</strong> a whole range.</p>
+    </div>
+    <div class="box q"><span class="label">Pairs · 4 min</span>
+      Do NOT name a data structure. Write the <strong>operation profile</strong>: which operations, what ratio, what sizes, what latency, what memory.</div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">00:03</span></p>
+    <h4>Expected profile (build it on the board)</h4>
+    <ul>
+      <li>Operations: range sum, range count (a sum of 0/1 indicators), range max, point update (correction), range update (backfill).</li>
+      <li>Ratio: dashboards refresh every 30 s for many viewers → queries dominate; corrections are rare for old buckets but frequent for the most recent minutes (late events arrive within minutes).</li>
+      <li>Sizes: n = 525,600 per series; 20,000 series → 10.5 billion buckets. Memory per series matters: 8 bytes × n = 4.2 MB; any 2× structure doubles 84 GB to 168 GB.</li>
+      <li>Latency: dashboard panel &lt; 100 ms including many series.</li>
+      <li>Mutability: old data is effectively immutable; only the recent tail changes.</li>
+    </ul>
+    <h4>Teaching point</h4>
+    <p>"The last bullet is the insight that changes everything: this is not one workload. Old data is static; the tail is dynamic. A good design may treat them differently." Keep this for the debrief.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>From profile to candidate designs</h2>
+  <table class="small">
+    <tr><th>Property of the workload</th><th>Pushes toward</th></tr>
+    <tr><td>Data never changes after load</td><td>Maximum precomputation: prefix sums, sparse table</td></tr>
+    <tr><td>Point updates frequent; invertible aggregate (sum, count, xor)</td><td>Fenwick tree</td></tr>
+    <tr><td>Min/max/other non-invertible aggregates + updates</td><td>Segment tree</td></tr>
+    <tr><td>Range updates (backfills)</td><td>Segment tree with lazy propagation, or rebuild</td></tr>
+    <tr><td>Small n, or rare queries</td><td>Plain array scan</td></tr>
+    <tr><td>Memory-bound at billions of buckets</td><td>No duplicate arrays; coarser pre-aggregation (hourly rollups)</td></tr>
+  </table>
+  <aside class="notes">
+    <p><span class="t">00:12</span></p>
+    <h4>Say</h4>
+    <p>"Each row is a property of the workload, not a property of a structure. This is the inversion we want: read left to right, never right to left."</p>
+    <h4>Rollups</h4>
+    <p>Real monitoring systems (Prometheus-style stores, time-series databases) mostly answer range queries with <em>pre-aggregated rollups</em>: per-minute, per-hour, per-day totals. A query over a week sums 7 daily values plus a few partial ends. That is a two-level prefix structure chosen for storage cost, not a textbook tree. Mention it so students see that the "answer" in industry is often not in the DSA textbook.</p>
+    <h4>Transition</h4>
+    <p>"Let us line up the candidates quickly — you know them — and then look at what each actually costs."</p>
+  </aside>
+</section>
+
+<!-- ====================== PART 2 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 2 · 00:20–01:00</span>
+  <h1>Four representations,<br>one question</h1>
+</section>
+
+<section class="slide">
+  <h2>Scan and prefix sums: the two extremes</h2>
+  <div class="cols small">
+    <div class="card">
+      <h3>Scan</h3>
+      <pre class="sm"><code>for (i = l; i &lt; r; ++i) s += a[i];</code></pre>
+      <p>query O(r − l) · update O(1) · memory n</p>
+      <p>Sequential memory: ~0.5–1 ns per element. n = 1,000 → well under a microsecond.</p>
+    </div>
+    <div class="card">
+      <h3>Prefix sums</h3>
+      <pre class="sm"><code>p[k] = a[0] + … + a[k−1]
+sum[l, r) = p[r] − p[l]</code></pre>
+      <p>query O(1) · update <strong>O(n)</strong> · memory n + 1</p>
+      <p>Only works for invertible operations (sum, xor), not min/max.</p>
+    </div>
+  </div>
+  <div class="box q small" style="margin-top:12px"><span class="label">Ask</span>A prefix-sum array serves 10,000 queries/s. One correction per second arrives for a random bucket. What happens?</div>
+  <aside class="notes">
+    <p><span class="t">00:20</span></p>
+    <h4>Answer</h4>
+    <p>Each correction rewrites on average n/2 = 262,800 entries ≈ 0.1–0.3 ms. One per second is fine: ~0.03% of a core. But corrections concentrate at the <em>end</em> (recent minutes) — then the suffix to rewrite is tiny and prefix sums are cheap! Corrections to the <em>start</em> of the year would be the expensive case. The distribution of update positions matters, not just their count.</p>
+    <h4>Contrast with the scan</h4>
+    <p>A year-long sum scans 525,600 values ≈ 0.3–0.5 ms. For one query that is fine; for a dashboard with 200 series × 10 panels refreshing every 30 s it is not. The scan's problem is throughput, not single-query latency.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Fenwick tree: logarithmic both ways, for invertible aggregates</h2>
+  <div class="cols">
+    <pre class="sm"><code>// t[k] covers a[k - lowbit(k), k)  (1-based k)
+Value prefix(size_t r) const {        // sum of a[0, r)
+    Value s = 0;
+    for (size_t k = r; k &gt; 0; k -= k &amp; -k) s += t_[k];
+    return s;
+}
+void add(size_t i, Value delta) {
+    for (size_t k = i + 1; k &lt; t_.size(); k += k &amp; -k)
+        t_[k] += delta;
+}</code></pre>
+    <div class="small">
+      <ul>
+        <li>query and update O(log n); ~15 lines</li>
+        <li>O(n) construction is possible (ours does it)</li>
+        <li>Natively <strong>adds</strong>. Our contract <strong>assigns</strong> → keep a copy of a[] to compute the delta → <strong>2n memory</strong></li>
+        <li>Efficient for invertible prefix-style aggregates such as sums; not a general solution for arbitrary dynamic range-min/max</li>
+      </ul>
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">00:30</span></p>
+    <h4>Teaching point — the contract costs memory</h4>
+    <p>"The API said <code>set(i, v)</code> assigns. Fenwick only knows how to add. To assign you need the old value: either store a copy of the array (2n memory, our choice) or compute a[i] = query(i, i+1) in O(log n) per set (no extra memory, slower). A one-word decision in the API — 'set' vs 'add' — doubled the memory. At 10.5 billion buckets that is 84 GB."</p>
+    <h4>Ask</h4>
+    <p>"Which is the better API for the metrics system: <code>set</code> or <code>add</code>?" Expected: late events naturally <em>add</em> to a bucket (another request arrived); corrections of a wrong value <em>assign</em>. Both exist; a system might expose <code>add</code> and implement assignment rarely. Good API design follows the domain.</p>
+    <h4>Don't</h4>
+    <p>Don't derive lowbit or prove correctness — they know it. If a student asks, <code>k &amp; -k</code> isolates the lowest set bit (two's complement).</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Segment tree: the general tool</h2>
+  <div class="cols wide-r">
+    <div class="small">
+      <ul>
+        <li>Any associative operation with an identity (a monoid): sum, min, max, gcd, "count and max"</li>
+        <li>query and update O(log n); iterative version is compact</li>
+        <li>Range updates via <strong>lazy propagation</strong> (extra array, harder code)</li>
+        <li>Memory 2n (iterative) to 4n (recursive)</li>
+      </ul>
+    </div>
+    <svg viewBox="0 0 560 250">
+      <g font-size="15" font-family="Consolas,monospace">
+        <rect x="230" y="10" width="100" height="36" rx="5" fill="#14304a"/><text x="244" y="34" fill="#fff">[0,8) 31</text>
+        <rect x="100" y="80" width="100" height="36" rx="5" fill="#0b6e75"/><text x="114" y="104" fill="#fff">[0,4) 12</text>
+        <rect x="360" y="80" width="100" height="36" rx="5" fill="#0b6e75"/><text x="374" y="104" fill="#fff">[4,8) 19</text>
+        <rect x="30" y="150" width="96" height="36" rx="5" fill="#e3f1f2" stroke="#0b6e75"/><text x="40" y="174">[0,2) 5</text>
+        <rect x="170" y="150" width="96" height="36" rx="5" fill="#e3f1f2" stroke="#0b6e75"/><text x="180" y="174">[2,4) 7</text>
+        <rect x="300" y="150" width="96" height="36" rx="5" fill="#fff4e0" stroke="#9a5b00"/><text x="308" y="174">[4,6) 11</text>
+        <rect x="430" y="150" width="96" height="36" rx="5" fill="#e3f1f2" stroke="#0b6e75"/><text x="440" y="174">[6,8) 8</text>
+      </g>
+      <g stroke="#14304a" stroke-width="1.5"><line x1="280" y1="46" x2="150" y2="80"/><line x1="280" y1="46" x2="410" y2="80"/><line x1="150" y1="116" x2="78" y2="150"/><line x1="150" y1="116" x2="218" y2="150"/><line x1="410" y1="116" x2="348" y2="150"/><line x1="410" y1="116" x2="478" y2="150"/></g>
+      <text x="20" y="230" font-size="15" fill="#46505e">update a[5]: recompute the highlighted path to the root — O(log n)</text>
+    </svg>
+  </div>
+  <div class="box plain xsmall">Static data and min/max only? A <strong>sparse table</strong> answers range-min in O(1) after O(n log n) preprocessing — memory n·log n (20× at n = 10⁶). Immutable data only.</div>
+  <aside class="notes">
+    <p><span class="t">00:38</span></p>
+    <h4>Say</h4>
+    <p>"Segment trees are the Swiss-army knife. That generality is exactly why they are over-used: you pay for a knife you do not need when the operation is a sum and the data never changes."</p>
+    <h4>Lazy propagation (conceptual)</h4>
+    <p>A backfill "add 5 to every bucket in [l, r)" would be O(n log n) with point updates; lazy propagation stores pending updates on internal nodes and pushes them down only when needed → O(log n) per range update. Cost: a second array and code that is notoriously bug-prone (forgetting to push). Alternative for rare backfills: rebuild in O(n). Measure how rare "rare" is.</p>
+    <h4>Sparse table</h4>
+    <p>Mention only. It is the "prefix sums of min": maximal precomputation for static data, O(n log n) memory. For the metrics system's old, immutable data it is a candidate for range-max; for the live tail it is useless.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>The cost table</h2>
+  <table class="small">
+    <tr><th></th><th>Scan</th><th>Prefix sums</th><th>Fenwick</th><th>Segment tree</th></tr>
+    <tr><td>Query</td><td>O(r − l)</td><td>O(1)</td><td>O(log n)</td><td>O(log n)</td></tr>
+    <tr><td>Point update</td><td>O(1)</td><td>O(n)</td><td>O(log n)</td><td>O(log n)</td></tr>
+    <tr><td>Range update</td><td>O(r − l)</td><td>O(n)</td><td>two Fenwicks*</td><td>O(log n) lazy</td></tr>
+    <tr><td>Build</td><td>—</td><td>O(n)</td><td>O(n)</td><td>O(n)</td></tr>
+    <tr><td>Memory (our set-contract)</td><td>n</td><td>n + 1</td><td>2n</td><td>2n</td></tr>
+    <tr><td>Arbitrary range min / max</td><td>yes</td><td>no</td><td>no (general case)</td><td>yes</td></tr>
+    <tr><td>Code / review risk</td><td>trivial</td><td>low</td><td>low</td><td>medium (high with lazy)</td></tr>
+    <tr><td>Concurrent readers</td><td>easy</td><td>trivial if immutable</td><td>needs sync</td><td>needs sync</td></tr>
+  </table>
+  <p class="xsmall muted">* Range-add + range-sum with two Fenwick trees is a known trick; mention only.</p>
+  <aside class="notes">
+    <p><span class="t">00:50</span></p>
+    <h4>Say</h4>
+    <p>"Big-O is two rows out of eight. The other six are where engineering decisions are actually won or lost."</p>
+    <h4>Ask</h4>
+    <p>"Which row would a code reviewer care about most? Which row would the on-call engineer care about?" Expected: reviewer → code/review risk and invariants; on-call → concurrency behaviour and update latency spikes (prefix sums' O(n) update is a latency spike on the write path).</p>
+    <h4>Transition</h4>
+    <p>"All four implement the same interface in <code>range_aggregate.hpp</code>. Let us look at that interface as a contract."</p>
+  </aside>
+</section>
+
+<!-- ====================== PART 3 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 3 · 01:00–01:30</span>
+  <h1>One interface, four implementations</h1>
+</section>
+
+<section class="slide">
+  <h2>The same contract behind every representation</h2>
+  <svg viewBox="0 0 1150 330">
+    <g font-family="Segoe UI, Arial" font-size="18">
+      <rect x="360" y="10" width="430" height="120" rx="8" fill="#14304a"/>
+      <text x="380" y="42" fill="#7fd1d7" font-size="16">interface RangeSum</text>
+      <text x="380" y="72" fill="#fff" font-family="Consolas,monospace" font-size="17">Value query(size_t l, size_t r) const;</text>
+      <text x="380" y="100" fill="#fff" font-family="Consolas,monospace" font-size="17">void  set(size_t i, Value v);</text>
+      <text x="380" y="122" fill="#c9d5e0" font-size="14">0-based · half-open [l, r) · assigns · int64 · throws out_of_range</text>
+      <g stroke="#14304a" stroke-width="2"><line x1="575" y1="130" x2="130" y2="200"/><line x1="575" y1="130" x2="425" y2="200"/><line x1="575" y1="130" x2="725" y2="200"/><line x1="575" y1="130" x2="1020" y2="200"/></g>
+      <rect x="30" y="200" width="200" height="100" rx="8" fill="#e3f1f2" stroke="#0b6e75"/><text x="50" y="232" font-weight="600">NaiveRange</text><text x="50" y="260" font-size="15">array</text><text x="50" y="284" font-size="15">q O(n) · u O(1)</text>
+      <rect x="325" y="200" width="200" height="100" rx="8" fill="#e3f1f2" stroke="#0b6e75"/><text x="345" y="232" font-weight="600">PrefixSumRange</text><text x="345" y="260" font-size="15">prefix array</text><text x="345" y="284" font-size="15">q O(1) · u O(n)</text>
+      <rect x="625" y="200" width="200" height="100" rx="8" fill="#e3f1f2" stroke="#0b6e75"/><text x="645" y="232" font-weight="600">FenwickRange</text><text x="645" y="260" font-size="15">tree + copy of a[]</text><text x="645" y="284" font-size="15">q, u O(log n)</text>
+      <rect x="920" y="200" width="200" height="100" rx="8" fill="#e3f1f2" stroke="#0b6e75"/><text x="940" y="232" font-weight="600">SegmentTree&lt;Op&gt;</text><text x="940" y="260" font-size="15">2n nodes</text><text x="940" y="284" font-size="15">q, u O(log n) · min/max</text>
+    </g>
+  </svg>
+  <p class="small">Callers depend on the contract; the representation can change as the workload changes — <strong>if</strong> the contract did not leak it.</p>
+  <aside class="notes">
+    <p><span class="t">01:00</span></p>
+    <h4>Say</h4>
+    <p>"This is the most important slide today. Because the four share one contract, the representation becomes a deployment decision you can revisit with evidence, instead of an architectural commitment."</p>
+    <h4>Ask: how could the contract leak the representation?</h4>
+    <p>Expected: exposing <code>prefix(r)</code> (only natural for prefix/Fenwick); promising O(1) query in the docs; returning a reference into internal storage; supporting min on the interface (excludes prefix/Fenwick); a <code>data()</code> accessor. Each one freezes the choice.</p>
+    <h4>C++ design note</h4>
+    <p>We used four concrete classes with the same member functions (compile-time polymorphism via templates in the benchmark). A virtual interface would allow runtime selection at the cost of an indirect call per operation (~1–2 ns — irrelevant for the naive scan, visible for prefix sums). Another decision with a measurable cost.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Range semantics are a contract, not a detail</h2>
+  <div class="cols small">
+    <table class="tight">
+      <tr><th>Question</th><th>Our decision</th></tr>
+      <tr><td>0- or 1-based?</td><td>0-based</td></tr>
+      <tr><td>Inclusive or half-open?</td><td>Half-open [l, r)</td></tr>
+      <tr><td>Empty range l == r?</td><td>Valid, returns 0 (identity)</td></tr>
+      <tr><td>l &gt; r, r &gt; n?</td><td><code>std::out_of_range</code></td></tr>
+      <tr><td><code>set</code> assigns or adds?</td><td>Assigns</td></tr>
+      <tr><td>Overflow?</td><td>int64; caller guarantees fit</td></tr>
+    </table>
+    <div class="box warn">
+      <span class="label">Why half-open</span>
+      <ul class="xsmall">
+        <li>[a, b) + [b, c) = [a, c): windows compose without ±1</li>
+        <li>Length is r − l; empty range is natural</li>
+        <li>Matches C++ iterators and most time-series APIs ([start, end))</li>
+      </ul>
+      A dashboard that sums [09:00, 10:00] and [10:00, 11:00] inclusively <strong>double-counts</strong> the 10:00 bucket.
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">01:07</span></p>
+    <h4>Teaching point</h4>
+    <p>Off-by-one errors in range APIs are among the most common production bugs, and they are silent: totals are slightly wrong. The fix is a contract decision, documented and tested at the boundaries (our <code>range_test.cpp</code> tests l == r, r == n, l &gt; r).</p>
+    <h4>Invalid ranges: throw or clamp?</h4>
+    <p>Ask: "A dashboard asks for [now − 1h, now + 5min) — the end is in the future. Throw or clamp?" Good answer: the <em>data structure</em> should be strict (throw) because it cannot know intent; the <em>service layer</em> above it may clamp and report the effective range to the user. Put leniency at the boundary with the most context.</p>
+    <h4>Overflow</h4>
+    <p>int64 sums of byte counters: 10¹² bytes per minute × 525,600 minutes ≈ 5 × 10¹⁷ — fits in int64 (9.2 × 10¹⁸) with only ~18× headroom. Bytes per <em>second</em> over 10 years may not. Options: document the bound, check with <code>__builtin_add_overflow</code>, use 128-bit, or saturate. Silent wrap-around in C++ signed arithmetic is undefined behaviour — a real correctness risk.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Mutation and concurrency</h2>
+  <div class="cols small">
+    <div>
+      <ul>
+        <li>Dashboards read while corrections write. Our classes are not thread-safe.</li>
+        <li>A Fenwick <code>set</code> touches ~log n cells; a reader in between sees a <strong>torn</strong> state — a total that never existed</li>
+        <li>Prefix-sum update rewrites a suffix: a long window of inconsistency</li>
+      </ul>
+    </div>
+    <div class="box key">
+      <span class="label">Options</span>
+      <ul class="xsmall">
+        <li>Reader-writer lock: simple; writers block readers</li>
+        <li><strong>Immutable snapshot + atomic swap</strong>: rebuild, publish a new pointer; readers never block</li>
+        <li>Split by mutability: immutable history (prefix sums) + small mutable tail (Fenwick or scan)</li>
+      </ul>
+    </div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">01:18</span></p>
+    <h4>Say</h4>
+    <p>"Lecture 11 goes deep on concurrency. Today the point is that mutability is not free even when the complexity table says O(log n): every mutable structure needs a synchronisation story, and immutable ones get it almost for free."</p>
+    <h4>The hybrid design (answer to Part 1's hint)</h4>
+    <p>For the metrics system: buckets older than an hour are immutable → store as prefix sums (O(1) queries, no locks, cheap to persist). The last hour (60 buckets) is mutable → a plain array scanned in &lt; 100 ns, or a tiny Fenwick. A query [l, r) splits into a prefix-sum part and a scan part. Periodically fold the tail into the history (a rebuild of one suffix). This design beats every single-structure answer on memory, simplicity and concurrency — and it is only visible if you looked at the workload first.</p>
+    <h4>Transition to break</h4>
+    <p>"After the break, you decide. No code: decisions and justifications."</p>
+  </aside>
+</section>
+
+<section class="slide divider">
+  <span class="kicker">01:30–01:40</span>
+  <h1>Break — 10 minutes</h1>
+  <p>Teams sit together · Open <code>Lecture_06/Student_Resources/EXERCISE.md</code></p>
+</section>
+
+<!-- ====================== PART 4 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 4 · 01:40–02:10</span>
+  <h1>Activity: what would you deploy?</h1>
+</section>
+
+<section class="slide">
+  <h2>Five workloads, one interface (teams, 20 min)</h2>
+  <table class="small">
+    <tr><th></th><th>Workload</th></tr>
+    <tr><td><strong>A</strong></td><td>n ≈ 1M; 99% range-sum queries, 1% point updates</td></tr>
+    <tr><td><strong>B</strong></td><td>n ≈ 1M; 50% queries, 50% point updates</td></tr>
+    <tr><td><strong>C</strong></td><td>n ≈ 1M; built once per night from a batch file, then read-only</td></tr>
+    <tr><td><strong>D</strong></td><td>n ≈ 1,000 config values; 50/50 mix; owned by a team new to the codebase</td></tr>
+    <tr><td><strong>E</strong></td><td>As B, but the dashboard also needs range <strong>maximum</strong></td></tr>
+  </table>
+  <div class="box warn small" style="margin-top:12px">For each: your choice, three engineering reasons (query, update, build, memory, code risk, generality, concurrency), and <strong>what would change your mind</strong>. "It is O(log n)" is not a reason on its own.</div>
+  <aside class="notes">
+    <p><span class="t">01:40</span></p>
+    <h4>Run it</h4>
+    <p>Teams write a row per workload on paper (the table is in <code>EXERCISE.md</code>). At 01:58, collect one choice per workload by show of hands; write the vote distribution on the board. <strong>Then</strong> run the benchmark (Part 5). The vote-then-measure sequence is the point.</p>
+    <h4>Push on these</h4>
+    <ul>
+      <li>Anyone choosing a segment tree for C: "What does the O(log n) update buy you when there are no updates?"</li>
+      <li>Anyone choosing prefix sums for A: "1% of operations are updates. What does one update cost at n = 1M?" (~0.3 ms; the average cost per operation becomes dominated by the 1%.)</li>
+      <li>For D: "Who is going to review and maintain this? What is 70 ns vs 17 ns worth?"</li>
+      <li>For E: "Can Fenwick do max under updates?" Not in general: range-max needs the answer for [l, r), and max has no inverse to "subtract" the prefix before l. Special cases exist (prefix-max when values only increase), but arbitrary range-max under arbitrary point updates is a segment-tree job.</li>
+    </ul>
+    <h4>Model answers</h4>
+    <p><code>Instructor_Only/Lecture_06/workload_decisions.md</code> — A Fenwick, B Fenwick, C prefix sums, D naive (or whatever the codebase already has), E segment tree.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Anti-patterns to avoid in your justification</h2>
+  <div class="cols small">
+    <div class="box bad"><span class="label">Weak</span>
+      <ul class="xsmall">
+        <li>"Segment tree is better because it is O(log n)."</li>
+        <li>"Prefix sums are O(1), so they are the fastest."</li>
+        <li>"The naive version is O(n), so it does not scale."</li>
+      </ul></div>
+    <div class="box good"><span class="label">Strong</span>
+      <ul class="xsmall">
+        <li>"At 1% updates, prefix sums spend more time updating than querying; Fenwick bounds both at ~50 ns and costs one extra array, which fits our 4 GB budget."</li>
+        <li>"For n = 1,000 a scan takes well under a microsecond; we choose clarity and zero review risk; we would revisit if this moved onto a hot path."</li>
+      </ul></div>
+  </div>
+  <aside class="notes">
+    <p><span class="t">02:02</span></p>
+    <h4>Say</h4>
+    <p>"The strong answers name a quantity, a cost and a condition for changing the decision. That is the style of Section B and C questions in the final exam, and of the 'Architecture/design decisions' criterion in your project."</p>
+  </aside>
+</section>
+
+<!-- ====================== PART 5 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 5 · 02:10–02:40</span>
+  <h1>Benchmark: when does<br>sophistication pay?</h1>
+</section>
+
+<section class="slide">
+  <h2>Measured: ns per operation (n = 2²⁰, 20,000 ops)</h2>
+  <table class="small">
+    <tr><th>Workload</th><th class="num">naive</th><th class="num">prefix sums</th><th class="num">Fenwick</th><th class="num">segment tree</th></tr>
+    <tr><td>A — 99% query</td><td class="num">131,097</td><td class="num">1,705</td><td class="num"><strong>48</strong></td><td class="num">117</td></tr>
+    <tr><td>B — 50% query</td><td class="num">70,112</td><td class="num">89,220</td><td class="num"><strong>42</strong></td><td class="num">84</td></tr>
+    <tr><td>C — query only</td><td class="num">144,435</td><td class="num"><strong>16</strong></td><td class="num">47</td><td class="num">224</td></tr>
+    <tr><td>D — n = 1,000, 50/50</td><td class="num">70</td><td class="num">79</td><td class="num"><strong>17</strong></td><td class="num">37</td></tr>
+  </table>
+  <p class="small" style="margin-top:10px">Memory: naive / prefix 8.4 MB; Fenwick / segment tree 16.8 MB. Build: 1–6 ms for all.</p>
+  <p class="xsmall muted">One run, MinGW g++ 15 -O2, instructor laptop, random ranges and positions. <code>range_bench.cpp</code></p>
+  <aside class="notes">
+    <p><span class="t">02:10</span> Run <code>./bench</code> live (10–20 s). Compare with the class vote on the board.</p>
+    <h4>Read it row by row</h4>
+    <ul>
+      <li><strong>A:</strong> prefix sums lose because the 1% of updates cost ~0.17 ms each on average: 200 updates dominate 19,800 O(1) queries. Fenwick wins; the segment tree is 2.4× slower than Fenwick for the same big-O (more memory traffic, more work per level).</li>
+      <li><strong>B:</strong> prefix sums are now worse than naive. Fenwick wins by three orders of magnitude.</li>
+      <li><strong>C:</strong> no updates → prefix sums win at 16 ns. The "sophisticated" segment tree is the slowest non-naive option (224 ns; this run also seems noisy — one run, remember).</li>
+      <li><strong>D:</strong> everything is under 100 ns. Fenwick is 4× faster than naive, but 70 ns per operation is irrelevant for a config service. Simplicity wins unless this is on a hot path.</li>
+    </ul>
+    <h4>Answer to the lecture question</h4>
+    <p>The sophisticated structure earned its complexity only for dynamic data at large n (A, B, E). For static data a simpler precomputation won; for small data, no structure was needed.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>What this benchmark does not show</h2>
+  <div class="cols small">
+    <ul>
+      <li>Tail latency: prefix-sum updates are an O(n) <strong>spike</strong> on the write path; means hide it</li>
+      <li>Update position distribution: recent-bucket corrections make prefix sums cheap</li>
+      <li>Range length distribution: dashboards mostly ask for recent, short windows</li>
+      <li>Memory at scale: 20,000 series × 2n</li>
+    </ul>
+    <ul>
+      <li>Concurrency and synchronisation cost</li>
+      <li>Range max, range updates, lazy propagation</li>
+      <li>Variance: one run per cell (look at C's segment-tree number)</li>
+      <li>The hybrid design (immutable history + mutable tail)</li>
+    </ul>
+  </div>
+  <div class="box q small" style="margin-top:12px"><span class="label">Ask</span>Which missing measurement is most likely to change the decision for the metrics system?</div>
+  <aside class="notes">
+    <p><span class="t">02:28</span></p>
+    <h4>Expected answer</h4>
+    <p>The <strong>update position distribution</strong>. Our benchmark updates random positions; the real system updates the most recent minutes. With tail updates, prefix sums' O(n) becomes O(distance from the end) ≈ tiny — prefix sums (or the hybrid) might win for A. A benchmark whose workload does not match the system can reverse the conclusion. Second: memory at 20,000 series.</p>
+    <h4>Teaching point</h4>
+    <p>"Your benchmark's workload generator is part of your argument. Justify it or use a trace." — exactly the 4-mark "Benchmarking/evidence" criterion.</p>
+  </aside>
+</section>
+
+<!-- ====================== PART 6 ====================== -->
+<section class="slide divider">
+  <span class="kicker">Part 6 · 02:40–03:00</span>
+  <h1>Design-document clinic<br>Due today, 31 Oct, 23:59 Cairo</h1>
+</section>
+
+<section class="slide">
+  <h2>Checklist: does your design document have…</h2>
+  <div class="cols small">
+    <ol>
+      <li>The <strong>problem</strong> and user, in one paragraph</li>
+      <li>A <strong>quantified workload</strong>: operations, ratios, sizes, distributions</li>
+      <li><strong>Constraints</strong> with numbers (latency percentile, memory)</li>
+      <li><strong>Alternatives</strong>: ≥ 2 + baseline, and when each wins</li>
+      <li>The <strong>selected architecture</strong> and module boundaries</li>
+      <li>The public <strong>API</strong></li>
+    </ol>
+    <ol start="7">
+      <li><strong>Contracts</strong>: edge cases, errors, complexity, invalidation, ownership</li>
+      <li><strong>Invariants</strong> and where they are checked</li>
+      <li><strong>Testing strategy</strong>: oracle, randomized/differential tests</li>
+      <li><strong>Evaluation strategy</strong>: workloads, metrics, baselines, repetitions</li>
+      <li><strong>Assumptions</strong> — which would hurt most if false?</li>
+      <li><strong>Risks</strong> and fallback</li>
+    </ol>
+  </div>
+  <aside class="notes">
+    <p><span class="t">02:40</span></p>
+    <h4>Run the clinic (15 min)</h4>
+    <ol>
+      <li>3 min: each team marks each item ✓ / partial / missing for their own draft.</li>
+      <li>7 min: swap with a neighbouring team; the reviewer finds the weakest item and writes one concrete question about it.</li>
+      <li>5 min: circulate; take two or three questions to the whole class.</li>
+    </ol>
+    <h4>What to look for</h4>
+    <ul>
+      <li>Item 4: alternatives exist but "when each wins" is missing — today's lesson in one line.</li>
+      <li>Item 7: API without edge-case semantics (half-open? duplicates? missing keys?).</li>
+      <li>Item 10: benchmark plan with a single workload.</li>
+    </ul>
+    <p>Submission: <code>docs/design.md</code> committed; repo URL + commit hash on Classroom; public headers must compile.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Deadlines</h2>
+  <table class="small">
+    <tr class="hl"><td>Today, Sat 31 Oct, 23:59 Cairo</td><td>Architecture / design / API document (<code>docs/design.md</code>, headers compile)</td></tr>
+    <tr class="hl"><td>Sat 7 Nov, 00:00–01:30</td><td>Written midterm (individual, Weeks 1–6), then Dependency Graph Engineering</td></tr>
+    <tr><td>Sat 14 Nov</td><td>Engineering Analysis Assignment released</td></tr>
+    <tr><td>Sat 21 Nov, 23:59 Cairo</td><td>Working implementation / prototype checkpoint</td></tr>
+  </table>
+  <div class="box plain small" style="margin-top:14px">
+    <span class="label">Midterm format</span>
+    Five 2-mark questions: workload analysis · API/contracts/invariants · design trade-offs · testing reasoning · interpreting performance evidence. 90 minutes. Permitted Materials: Closed book; no notes permitted.
+  </div>
+  <aside class="notes">
+    <p><span class="t">02:55</span></p>
+    <p>Midterm covers Weeks 1–6, including today. Today's workload-decision exercise and the "what the benchmark does not show" slide are representative of Q3 and Q5.</p>
+    <p>Midterm: 90 minutes; closed book; no notes permitted. Do not add further rules.</p>
+  </aside>
+</section>
+
+<section class="slide">
+  <h2>Summary</h2>
+  <ol>
+    <li>Write the operation profile before naming a structure.</li>
+    <li>Scan, prefix sums, Fenwick and segment trees are points on a precompute-vs-update curve.</li>
+    <li>Big-O is two rows of an eight-row cost table: memory, code risk, generality and concurrency decide too.</li>
+    <li>One contract, many representations: keep the contract from leaking the choice.</li>
+    <li>Range semantics (half-open, 0-based, invalid ranges, assign vs add, overflow) are contract decisions.</li>
+    <li>Often the best design splits the data by mutability.</li>
+  </ol>
+  <p class="small muted">Next: Lecture 7 · Sat 7 Nov — Written Midterm (00:00–01:30) + Dependency Graph Engineering.</p>
+  <aside class="notes"><p>Exit question: "Which workload property in your project has the biggest influence on your data-structure choice — and is it measured or assumed?"</p></aside>
+</section>
+
+<script src="../common/slides.js"></script>
+</body>
+</html>
