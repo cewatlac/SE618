@@ -1,14 +1,11 @@
-# Lecture 8 — Workflow Engines, DAGs, Failure and Recovery · Sat 14 Nov 2026
+# Lecture 08 — Workflow Engines, DAGs, Failure and Recovery
 
-**Lesson:** failure semantics and recovery behavior matter as much as successful execution.
-**Upcoming:** **working implementation / prototype checkpoint due Sat 21 Nov 2026, 23:59 Cairo.** Engineering Analysis Assignment released today (due Sat 12 Dec).
+Date: Sat 14 Nov 2026
 
-Slides: `index.html`.
+[Open lecture slides](index.html) | [Back to course library](../index.html)
 
-| File (`Student_Resources/`) | Purpose | Build / run |
-|---|---|---|
-| `workflow.hpp` | Workflow engine: happy path works; TODOs for stale messages, retries/propagation, crash recovery | header-only |
-| `workflow_test.cpp` | Nine failure-injection scenarios (S1–S9) | `g++ -std=c++20 -O1 -g workflow_test.cpp` |
-| `EXERCISE.md` | State-model design sheet + fault-injection cases | — |
+## Student resources
 
-Solution: `../../Instructor_Only/Lecture_08/workflow_solution.hpp` (to test it, add `-DSOLUTION -I../../../Instructor_Only/Lecture_08`). Model state table: `../../Instructor_Only/Lecture_08/state_model_answer.md`.
+- [`EXERCISE.md`](Student_Resources/EXERCISE.md) — State-model design sheet + fault-injection cases
+- [`workflow.hpp`](Student_Resources/workflow.hpp) — Workflow engine: happy path works; TODOs for stale messages, retries/propagation, crash recovery
+- [`workflow_test.cpp`](Student_Resources/workflow_test.cpp) — Nine failure-injection scenarios (S1–S9)

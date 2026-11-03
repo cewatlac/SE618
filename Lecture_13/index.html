@@ -1,254 +1,198 @@
+<!doctype html>
 <!DOCTYPE html>
+
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1" name="viewport"/>
 <title>SE618 L13 — Engineering Design Reviews / Project Defenses</title>
-<link rel="stylesheet" href="../common/styles.css">
-<link rel="stylesheet" href="../common/print.css">
-</head>
-<body data-course="SE618" data-lecture="Lecture 13 · Sat 19 Dec 2026">
-
+<link href="../common/styles.css" rel="stylesheet"/>
+<link href="../common/print.css" rel="stylesheet"/>
+<meta content="SE618 Lecture 13: Engineering Design Reviews / Project Defenses. Student-facing interactive slides." name="description"/></head>
+<body data-course="SE618" data-lecture="Lecture 13 · Sat 19 Dec 2026" data-public="true">
 <section class="slide title">
-  <span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
-  <h1>Lecture 13<br>Engineering Design Reviews · Project Defenses</h1>
-  <p>Show us the decision and the evidence. Then show us that each of you understands it.</p>
-  <div class="meta">Saturday 19 December 2026 · Defense session 1<br>Repositories frozen at 09:00 Cairo time today (tag <code style="background:none;color:#fff">v1.0</code>)</div>
-  <aside class="notes">
-    <h4>This is an assessment session, not a lecture</h4>
-    <p>Use at most 10–15 minutes for the opening slides (1–8). The rest of the session is team slots: presentation/demo (~12 min) + individual vivas (~8 min per student) + changeover.</p>
-    <h4>Before students arrive</h4>
-    <ul>
-      <li>Open <code>04_Grading/Defense_Grading_Sheet.xlsx</code> (the Teams sheet lists Team IDs; before this session, populate each team's project title, assigned session and slot).</li>
-      <li>Open <code>Instructor_Only/Lecture_13/Defense_Instructor_Guide.md</code> and <code>Viva_Question_Bank.md</code>.</li>
-      <li>Check every team's <code>v1.0</code> tag is dated before today 09:00 Cairo time; note any team without a tag.</li>
-    </ul>
-    <h4>Capacity warning</h4>
-    <p>A 3-person team needs ≈ 36 minutes plus changeover. Two 3-hour sessions comfortably support only about 8–10 three-person teams depending on transitions. The final schedule must have been adjusted to the actual team count; if not, apply the fallback options in the instructor guide (second examiner, 6-minute vivas, 10-minute presentations) and announce them now.</p>
-  </aside>
-</section>
+<span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
+<h1>Lecture 13<br/>Engineering Design Reviews · Project Defenses</h1>
+<p>Show us the decision and the evidence. Then show us that each of you understands it.</p>
+<div class="meta">Saturday 19 December 2026 · Defense session 1<br/>Repositories frozen at 09:00 Cairo time today (tag <code style="background:none;color:#fff">v1.0</code>)</div>
 
+</section>
 <section class="slide">
-  <h2>Today's format</h2>
-  <div class="cols small">
-    <div>
-      <table class="tight">
-        <tr><th>Part</th><th>Who</th><th>Approx. time</th></tr>
-        <tr><td>Team presentation + live demo</td><td>Team</td><td>~12 min</td></tr>
-        <tr><td>Individual viva</td><td>Each student</td><td>~8 min each</td></tr>
-        <tr><td>Changeover</td><td>—</td><td>~3 min</td></tr>
-      </table>
-      <p class="xsmall muted" style="margin-top:8px">Approximate timing will be confirmed based on the final number of teams. The published slot list is authoritative.</p>
-    </div>
-    <div class="box key">
-      <span class="label">Marks (5)</span>
-      Team presentation / demo — <strong>2</strong><br>Individual viva — <strong>3</strong><br>
-      <span class="xsmall">The project itself (20) is marked from the frozen repository, not from the talk.</span>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:00</span></p>
-    <p>Say: "Today and next Saturday assess 5 marks. Your 20 project marks come from the repository you froze this morning. The talk is where you show the reasoning; the viva is where each of you shows you own it."</p>
-    <p>Announce the slot order (Teams sheet or a printed list) and where waiting teams should sit. Teams not presenting today should use the time to prepare, not to change the repository (it is frozen).</p>
-  </aside>
-</section>
+<h2>Today's format</h2>
+<div class="cols small">
+<div>
+<table class="tight">
+<tr><th>Part</th><th>Who</th><th>Approx. time</th></tr>
+<tr><td>Team presentation + live demo</td><td>Team</td><td>~12 min</td></tr>
+<tr><td>Individual viva</td><td>Each student</td><td>~8 min each</td></tr>
+<tr><td>Changeover</td><td>—</td><td>~3 min</td></tr>
+</table>
+<p class="xsmall muted" style="margin-top:8px">Approximate timing will be confirmed based on the final number of teams. The published slot list is authoritative.</p>
+</div>
+<div class="box key">
+<span class="label">Marks (5)</span>
+      Team presentation / demo — <strong>2</strong><br/>Individual viva — <strong>3</strong><br/>
+<span class="xsmall">The project itself (20) is marked from the frozen repository, not from the talk.</span>
+</div>
+</div>
 
+</section>
 <section class="slide">
-  <h2>What your 12 minutes should show</h2>
-  <div class="cols small">
-    <ol>
-      <li>The problem and the user/system need</li>
-      <li>Quantified workload and constraints</li>
-      <li>Design alternatives you considered</li>
-      <li>Selected architecture / data structures</li>
-      <li>Key API, contracts, invariants</li>
-      <li>Implementation highlights</li>
-    </ol>
-    <ol start="7">
-      <li>Testing strategy</li>
-      <li>Benchmark / experimental evidence</li>
-      <li>Results — with spread and conditions</li>
-      <li>Limitations: what the evidence does not show</li>
-      <li>What you would redesign under changed assumptions</li>
-    </ol>
-  </div>
-  <div class="box plain small" style="margin-top:10px"><span class="label">Live demo</span>From the tagged release: run the tests and one benchmark.</div>
-  <aside class="notes">
-    <p><span class="t">00:03</span></p>
-    <p>This is the engineering chain of the whole course in presentation form. Tell students that items 2, 3, 8 and 10 are where most marks are won or lost; item 6 should be short.</p>
-    <p>If a demo fails, the team explains why and shows committed results instead. A well-explained failure is better than a silent one.</p>
-  </aside>
-</section>
+<h2>What your 12 minutes should show</h2>
+<div class="cols small">
+<ol>
+<li>The problem and the user/system need</li>
+<li>Quantified workload and constraints</li>
+<li>Design alternatives you considered</li>
+<li>Selected architecture / data structures</li>
+<li>Key API, contracts, invariants</li>
+<li>Implementation highlights</li>
+</ol>
+<ol start="7">
+<li>Testing strategy</li>
+<li>Benchmark / experimental evidence</li>
+<li>Results — with spread and conditions</li>
+<li>Limitations: what the evidence does not show</li>
+<li>What you would redesign under changed assumptions</li>
+</ol>
+</div>
+<div class="box plain small" style="margin-top:10px"><span class="label">Live demo</span>From the tagged release: run the tests and one benchmark.</div>
 
+</section>
 <section class="slide">
-  <h2>What not to spend time on</h2>
-  <div class="cols small">
-    <div class="box bad">
-      <span class="label">Low value</span>
-      <ul class="xsmall">
-        <li>Long background introductions</li>
-        <li>Explaining textbook algorithms (we know how a trie works)</li>
-        <li>Reading code line by line</li>
-        <li>Decorative slides without evidence</li>
-        <li>"Future work" lists without priorities</li>
-      </ul>
-    </div>
-    <div class="box good">
-      <span class="label">High value</span>
-      <ul class="xsmall">
-        <li>One slide with the workload in numbers</li>
-        <li>The alternative you rejected, and why</li>
-        <li>One chart with spread, plus "what it does not show"</li>
-        <li>The invariant that almost broke</li>
-        <li>A negative result and what you learned</li>
-      </ul>
-    </div>
-  </div>
-  <p class="small muted">Presentation polish is not the primary goal.</p>
-  <aside class="notes"><p><span class="t">00:06</span> Keep it brief; students should have prepared already. The point is to reassure them that plain slides are fine.</p></aside>
-</section>
+<h2>What not to spend time on</h2>
+<div class="cols small">
+<div class="box bad">
+<span class="label">Low value</span>
+<ul class="xsmall">
+<li>Long background introductions</li>
+<li>Explaining textbook algorithms (we know how a trie works)</li>
+<li>Reading code line by line</li>
+<li>Decorative slides without evidence</li>
+<li>"Future work" lists without priorities</li>
+</ul>
+</div>
+<div class="box good">
+<span class="label">High value</span>
+<ul class="xsmall">
+<li>One slide with the workload in numbers</li>
+<li>The alternative you rejected, and why</li>
+<li>One chart with spread, plus "what it does not show"</li>
+<li>The invariant that almost broke</li>
+<li>A negative result and what you learned</li>
+</ul>
+</div>
+</div>
+<p class="small muted">Presentation polish is not the primary goal.</p>
 
+</section>
 <section class="slide">
-  <h2>How the viva works</h2>
-  <div class="cols small">
-    <div>
-      <ul>
-        <li>About 8 minutes per student, one at a time, in front of the team</li>
-        <li>Each student gets <strong>different</strong> questions</li>
-        <li>We start with your own contribution, then move beyond it: expect questions on a component a teammate wrote</li>
-        <li>You may be asked to open the repository and show where something happens</li>
-        <li>Teammates may not answer for you</li>
-      </ul>
-    </div>
-    <div class="box key">
-      <span class="label">Typical questions</span>
-      <ul class="xsmall">
-        <li>Why this structure? What was the strongest alternative?</li>
-        <li>Which invariant matters most? Show where it is maintained.</li>
-        <li>What does your benchmark prove — and not prove?</li>
-        <li>What happens at 100× data, 90% writes, 32 workers?</li>
-      </ul>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:08</span></p>
-    <p>Say: "The viva is not a memory quiz. 'I don't know, but here is how I would find out' is a reasonable answer. Guessing confidently is not."</p>
-    <p>The full question bank stays instructor-only. The four examples on the slide were already published in the assessment documents.</p>
-  </aside>
-</section>
+<h2>How the viva works</h2>
+<div class="cols small">
+<div>
+<ul>
+<li>About 8 minutes per student, one at a time, in front of the team</li>
+<li>Each student gets <strong>different</strong> questions</li>
+<li>We start with your own contribution, then move beyond it: expect questions on a component a teammate wrote</li>
+<li>You may be asked to open the repository and show where something happens</li>
+<li>Teammates may not answer for you</li>
+</ul>
+</div>
+<div class="box key">
+<span class="label">Typical questions</span>
+<ul class="xsmall">
+<li>Why this structure? What was the strongest alternative?</li>
+<li>Which invariant matters most? Show where it is maintained.</li>
+<li>What does your benchmark prove — and not prove?</li>
+<li>What happens at 100× data, 90% writes, 32 workers?</li>
+</ul>
+</div>
+</div>
 
+</section>
 <section class="slide">
-  <h2>What is assessed</h2>
-  <table class="small">
-    <tr><th>Component</th><th>Strong performance looks like</th></tr>
-    <tr><td>Team presentation / demo (2)</td><td>Clear arc from problem to decision to evidence to limitations, on time; demo runs from the tagged release; team answers accurately</td></tr>
-    <tr><td>Viva — technical understanding</td><td>Explains the design, the invariants and a teammate's component; can locate them in the code</td></tr>
-    <tr><td>Viva — reasoning and trade-offs</td><td>Justifies the choice against alternatives; reasons correctly about changed workload, scale and concurrency</td></tr>
-    <tr><td>Viva — evidence and limitations</td><td>Knows what the results show and do not show; names the least trustworthy result and why</td></tr>
-  </table>
-  <aside class="notes">
-    <p><span class="t">00:10</span></p>
-    <p>Viva /3 = three sub-scores of 0 / 0.5 / 1, matching the rubric levels in <code>assessment.md</code> (3; 2–2.5; 1–1.5; 0–0.5).</p>
-  </aside>
-</section>
+<h2>What is assessed</h2>
+<table class="small">
+<tr><th>Component</th><th>Strong performance looks like</th></tr>
+<tr><td>Team presentation / demo (2)</td><td>Clear arc from problem to decision to evidence to limitations, on time; demo runs from the tagged release; team answers accurately</td></tr>
+<tr><td>Viva — technical understanding</td><td>Explains the design, the invariants and a teammate's component; can locate them in the code</td></tr>
+<tr><td>Viva — reasoning and trade-offs</td><td>Justifies the choice against alternatives; reasons correctly about changed workload, scale and concurrency</td></tr>
+<tr><td>Viva — evidence and limitations</td><td>Knows what the results show and do not show; names the least trustworthy result and why</td></tr>
+</table>
 
+</section>
 <section class="slide">
-  <h2>Team result, individual understanding</h2>
-  <div class="cols small">
-    <div>
-      <ul>
-        <li>All members receive the same <strong>project</strong> mark (20) and the same <strong>team presentation</strong> mark (2)</li>
-        <li>The <strong>viva</strong> (3) is individual</li>
-        <li>A student who cannot explain the team's design, or their own commits, receives a lower viva mark than teammates who can</li>
-      </ul>
-    </div>
-    <div class="box plain">
-      <span class="label">What we look at</span>
-      <ul class="xsmall">
-        <li>Answers to questions outside your own component</li>
-        <li>Ability to locate and explain code</li>
-        <li>Reasoning under changed assumptions</li>
-        <li>Commit history as supporting context — not as the only evidence</li>
-      </ul>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:12</span></p>
-    <p>This is stated in the syllabus (§8, individual accountability). Keep the tone neutral; this is how the course distinguishes individual understanding, not a threat.</p>
-    <p>Integrity concerns are recorded separately and handled through the faculty process, not in the viva score. See the instructor guide.</p>
-  </aside>
-</section>
+<h2>Team result, individual understanding</h2>
+<div class="cols small">
+<div>
+<ul>
+<li>All members receive the same <strong>project</strong> mark (20) and the same <strong>team presentation</strong> mark (2)</li>
+<li>The <strong>viva</strong> (3) is individual</li>
+<li>A student who cannot explain the team's design, or their own commits, receives a lower viva mark than teammates who can</li>
+</ul>
+</div>
+<div class="box plain">
+<span class="label">What we look at</span>
+<ul class="xsmall">
+<li>Answers to questions outside your own component</li>
+<li>Ability to locate and explain code</li>
+<li>Reasoning under changed assumptions</li>
+<li>Commit history as supporting context — not as the only evidence</li>
+</ul>
+</div>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Today's running order</h2>
-  <table class="small">
-    <tr><th>Slot</th><th>Team</th><th>Project</th><th>Start (approx.)</th></tr>
-    <tr><td>1</td><td></td><td></td><td></td></tr>
-    <tr><td>2</td><td></td><td></td><td></td></tr>
-    <tr><td>3</td><td></td><td></td><td></td></tr>
-    <tr><td>4</td><td></td><td></td><td></td></tr>
-    <tr><td>5</td><td></td><td></td><td></td></tr>
-  </table>
-  <p class="small muted">Remaining teams: Saturday 26 December 2026.</p>
-  <aside class="notes">
-    <p><span class="t">00:14</span></p>
-    <p>Fill this table from the Teams sheet before class (edit the HTML), or show the published Classroom list instead. Leave the slide on screen during changeovers.</p>
-    <p>Plan one 10-minute break roughly halfway through the session.</p>
-  </aside>
-</section>
+<h2>Today's running order</h2>
+<table class="small">
+<tr><th>Slot</th><th>Team</th><th>Project</th><th>Start (approx.)</th></tr>
+<tr><td>1</td><td></td><td></td><td></td></tr>
+<tr><td>2</td><td></td><td></td><td></td></tr>
+<tr><td>3</td><td></td><td></td><td></td></tr>
+<tr><td>4</td><td></td><td></td><td></td></tr>
+<tr><td>5</td><td></td><td></td><td></td></tr>
+</table>
+<p class="small muted">Remaining teams: Saturday 26 December 2026.</p>
 
+</section>
 <section class="slide divider">
-  <span class="kicker">Defenses</span>
-  <h1>Now presenting</h1>
-  <p>Team presentation ~12 min · then individual vivas</p>
-  <aside class="notes">
-    <h4>Per team (see the instructor guide)</h4>
-    <ol>
-      <li>Before: open the repo; note the claim, the decision rule and each member's ownership; pick 2 viva areas per student.</li>
-      <li>Presentation: record evidence claims, assumptions, who explains what, inconsistencies. Score the presentation (/2) right after it ends.</li>
-      <li>Vivas: different questions per student; start with own work, then a teammate's component; probe evidence and limitations for everyone.</li>
-      <li>After: enter the sub-scores immediately; 1–2 evidence-based comments each; question codes asked.</li>
-    </ol>
-  </aside>
-</section>
+<span class="kicker">Defenses</span>
+<h1>Now presenting</h1>
+<p>Team presentation ~12 min · then individual vivas</p>
 
+</section>
 <section class="slide">
-  <h2>While the next team sets up</h2>
-  <div class="cols small">
-    <div class="box q">
-      <span class="label">For the audience (not graded)</span>
-      <ul class="xsmall">
-        <li>What workload assumption did the last team depend on most?</li>
-        <li>Under which condition would you have chosen differently?</li>
-        <li>Which of their results would you trust least, and why?</li>
-      </ul>
-    </div>
-    <div class="box plain">
-      <span class="label">Across teams so far</span>
-      <ul class="xsmall">
-        <li>Two teams chose different structures for similar problems: what differed in their workloads?</li>
-        <li>Which negative results have we seen today?</li>
-      </ul>
-    </div>
-  </div>
-  <aside class="notes">
-    <p>Use during changeovers only (1–2 minutes), and only if time allows. This keeps the audience engaged and previews next week's synthesis. Never delay a slot for it.</p>
-  </aside>
-</section>
+<h2>While the next team sets up</h2>
+<div class="cols small">
+<div class="box q">
+<span class="label">For the audience (not graded)</span>
+<ul class="xsmall">
+<li>What workload assumption did the last team depend on most?</li>
+<li>Under which condition would you have chosen differently?</li>
+<li>Which of their results would you trust least, and why?</li>
+</ul>
+</div>
+<div class="box plain">
+<span class="label">Across teams so far</span>
+<ul class="xsmall">
+<li>Two teams chose different structures for similar problems: what differed in their workloads?</li>
+<li>Which negative results have we seen today?</li>
+</ul>
+</div>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Next Saturday — 26 December 2026</h2>
-  <ul>
-    <li>Defense session 2: remaining teams (slot list on Classroom)</li>
-    <li>Course synthesis: engineering decisions across the whole course</li>
-    <li>Final exam preparation: the kind of reasoning Sections A, B and C expect</li>
-  </ul>
-  <p class="small muted">Review material: <code>Lecture_14/Student_Resources/Final_Review_Framework.md</code> and <code>Practice_Cases.md</code>.</p>
-  <aside class="notes">
-    <p>Before leaving: make sure all scores and comments for today's teams are entered and saved. Transfer to the Master Gradebook after session 2 (or today, for completed teams).</p>
-  </aside>
-</section>
+<h2>Next Saturday — 26 December 2026</h2>
+<ul>
+<li>Defense session 2: remaining teams (slot list on Classroom)</li>
+<li>Course synthesis: engineering decisions across the whole course</li>
+<li>Final exam preparation: the kind of reasoning Sections A, B and C expect</li>
+</ul>
+<p class="small muted">Review material: <code>Lecture_14/Student_Resources/Final_Review_Framework.md</code> and <code>Practice_Cases.md</code>.</p>
 
+</section>
 <script src="../common/slides.js"></script>
 </body>
 </html>

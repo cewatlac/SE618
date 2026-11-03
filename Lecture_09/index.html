@@ -1,623 +1,443 @@
+<!doctype html>
 <!DOCTYPE html>
+
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1" name="viewport"/>
 <title>SE618 L9 — Persistent Data Structures and Versioned Systems</title>
-<link rel="stylesheet" href="../common/styles.css">
-<link rel="stylesheet" href="../common/print.css">
-</head>
-<body data-course="SE618" data-lecture="Lecture 9 · Sat 21 Nov 2026">
-
+<link href="../common/styles.css" rel="stylesheet"/>
+<link href="../common/print.css" rel="stylesheet"/>
+<meta content="SE618 Lecture 9: Persistent Data Structures and Versioned Systems. Student-facing interactive slides." name="description"/></head>
+<body data-course="SE618" data-lecture="Lecture 9 · Sat 21 Nov 2026" data-public="true">
 <section class="slide title">
-  <span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
-  <h1>Lecture 9<br>Persistent Data Structures and Versioned Systems</h1>
-  <p>Never changing old state makes many things easy. Paying for all that old state is the engineering problem.</p>
-  <div class="meta">Saturday 21 November 2026 · 3 hours<br><strong style="color:#fff">Working prototype checkpoint due today, 23:59 Cairo</strong></div>
-  <aside class="notes">
-    <h4>Plan (3h)</h4>
-    <table><tr><td>00:00–00:20</td><td>Part 1 — Scenario: a configuration platform that must answer "what was live at 14:02?"</td></tr>
-    <tr><td>00:20–01:00</td><td>Part 2 — Snapshots, full copy, structural sharing, copy-on-write, version graphs, undo/redo models</td></tr>
-    <tr><td>01:00–01:30</td><td>Part 3 — Lifecycle: ownership, reclamation, compaction, amplification, disk, crashes, API, invariants</td></tr>
-    <tr><td>01:30–01:40</td><td>Break</td></tr>
-    <tr><td>01:40–02:15</td><td>Part 4 — Hands-on: find the snapshot violation; predict costs</td></tr>
-    <tr><td>02:15–02:40</td><td>Part 5 — Experiment: where each design becomes unattractive</td></tr>
-    <tr><td>02:40–03:00</td><td>Part 6 — What "working prototype" means (due tonight)</td></tr></table>
-    <h4>Prepare</h4>
-    <p><code>Student_Resources/</code>: <code>versioned_store.hpp</code> (full copy, delta chain with checkpoints/compaction, path copy — the path-copy store contains a deliberate "fast path" that breaks snapshots), <code>versioned_test.cpp</code>, <code>versioned_bench.cpp</code> (~5 s), <code>EXERCISE.md</code>. Instructor: <code>Instructor_Only/Lecture_09/versioned_store_solution.hpp</code>, <code>answers.md</code> (measured table + explanations).</p>
-  </aside>
-</section>
+<span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
+<h1>Lecture 9<br/>Persistent Data Structures and Versioned Systems</h1>
+<p>Never changing old state makes many things easy. Paying for all that old state is the engineering problem.</p>
+<div class="meta">Saturday 21 November 2026 · 3 hours<br/><strong style="color:#fff">Working prototype checkpoint due today, 23:59 Cairo</strong></div>
 
+</section>
 <section class="slide">
-  <h2>Where we are</h2>
-  <div class="cols">
-    <div class="small">
-      <ul>
-        <li>L5: immutable index segments + merge</li>
-        <li>L8: a journal from which state is derived by replay</li>
-        <li>Today: make <strong>history itself</strong> a first-class, queryable part of the data structure</li>
-      </ul>
-      <p>You know what a persistent tree is. The question today: when is keeping every version worth what it costs, and how do you keep that cost bounded?</p>
-    </div>
-    <div class="box key">
-      <span class="label">Today's distinctive lesson</span>
+<h2>Where we are</h2>
+<div class="cols">
+<div class="small">
+<ul>
+<li>L5: immutable index segments + merge</li>
+<li>L8: a journal from which state is derived by replay</li>
+<li>Today: make <strong>history itself</strong> a first-class, queryable part of the data structure</li>
+</ul>
+<p>You know what a persistent tree is. The question today: when is keeping every version worth what it costs, and how do you keep that cost bounded?</p>
+</div>
+<div class="box key">
+<span class="label">Today's distinctive lesson</span>
       Immutability and versioning simplify reasoning, rollback, auditing and concurrency — but move cost into <strong>memory, storage, compaction and lifecycle management</strong>.
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:00</span></p>
-    <h4>Ask</h4>
-    <p>"Which tools you use every day are built on immutable versions?" Expected: Git (content-addressed snapshots), Docker image layers, database MVCC (PostgreSQL row versions), cloud object versioning, Google Docs history, React/Redux state, functional languages' collections (Clojure, Scala, Immutable.js). "All of them had to solve today's second half: garbage collection, packing, compaction."</p>
-    <p>Remind: prototype checkpoint tonight; the last 20 minutes are about it.</p>
-  </aside>
+</div>
+
 </section>
 
-<!-- ====================== PART 1 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 1 · 00:00–00:20</span>
-  <h1>Scenario: configuration<br>with a memory</h1>
+<span class="kicker">Part 1 · 00:00–00:20</span>
+<h1>Scenario: configuration<br/>with a memory</h1>
 </section>
-
 <section class="slide">
-  <h2>The scenario</h2>
-  <div class="cols wide-l small">
-    <div>
-      <p>A platform stores <strong>20,000 settings</strong> (feature flags, limits, endpoints) read by 3,000 services.</p>
-      <ul>
-        <li>~<strong>2,000 commits/day</strong>, usually 1–5 settings each; occasionally a bulk migration changes 30%</li>
-        <li>Services read the <strong>current</strong> version ~50,000 times/s</li>
-        <li>Incident reviews ask: "what exactly was live at 14:02?"</li>
-        <li>Staged rollout: a <strong>branch</strong> of the config for 5% of traffic</li>
-        <li>Instant <strong>rollback</strong> to any version from the last 30 days; audit for 1 year</li>
-      </ul>
-    </div>
-    <div class="box q"><span class="label">Pairs · 4 min</span>
+<h2>The scenario</h2>
+<div class="cols wide-l small">
+<div>
+<p>A platform stores <strong>20,000 settings</strong> (feature flags, limits, endpoints) read by 3,000 services.</p>
+<ul>
+<li>~<strong>2,000 commits/day</strong>, usually 1–5 settings each; occasionally a bulk migration changes 30%</li>
+<li>Services read the <strong>current</strong> version ~50,000 times/s</li>
+<li>Incident reviews ask: "what exactly was live at 14:02?"</li>
+<li>Staged rollout: a <strong>branch</strong> of the config for 5% of traffic</li>
+<li>Instant <strong>rollback</strong> to any version from the last 30 days; audit for 1 year</li>
+</ul>
+</div>
+<div class="box q"><span class="label">Pairs · 4 min</span>
       Before any structure: which questions about versions must you answer?</div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:03</span></p>
-    <h4>Expected questions (write on the board)</h4>
-    <ul>
-      <li>Do we need <em>every</em> version, or every version for 30 days and daily snapshots after?</li>
-      <li>Write rate vs read rate; and <em>which</em> versions are read — current (hot) vs historical (rare but must be possible).</li>
-      <li>How big is a typical change relative to the whole state?</li>
-      <li>How long must versions live, and who may delete them (legal hold, audit)?</li>
-      <li>What does rollback mean: a new version equal to an old one (history preserved) or rewinding (history lost)?</li>
-      <li>Consistency: a service must see one whole version, never half of a commit.</li>
-      <li>Where do versions live after a restart — memory, disk, both?</li>
-    </ul>
-    <h4>Teaching point</h4>
-    <p>"Rollback = create a new version equal to an old one" is the immutable answer and it keeps the audit trail intact. "Rollback = overwrite" loses exactly the evidence the incident review needs. The data model decides whether that is even possible.</p>
-  </aside>
-</section>
+</div>
 
+</section>
 <section class="slide">
-  <h2>The workload decides the design</h2>
-  <table class="small">
-    <tr><th>Workload property</th><th>Pushes toward</th></tr>
-    <tr><td>Few versions, large changes</td><td>Full snapshots</td></tr>
-    <tr><td>Many versions, tiny changes</td><td>Deltas or structural sharing</td></tr>
-    <tr><td>Reads mostly of the newest version</td><td>Cheap "head"; history may be slow</td></tr>
-    <tr><td>Frequent reads of arbitrary old versions</td><td>Every version directly addressable</td></tr>
-    <tr><td>Long retention, bounded storage</td><td>Compaction, tiering, thinning of old versions</td></tr>
-    <tr><td>Branches and merges</td><td>A version <strong>graph</strong>, not a list</td></tr>
-  </table>
-  <aside class="notes">
-    <p><span class="t">00:12</span></p>
-    <h4>Say</h4>
-    <p>"Same structure as Lectures 3 and 6: read the table left to right. Our config platform hits rows 2, 3, 5 and 6 at once — which is why real systems combine techniques (e.g. Git: snapshots of trees with structural sharing, plus delta compression in pack files, plus garbage collection)."</p>
-    <h4>Quick estimate to do aloud</h4>
-    <p>20,000 settings × ~64 bytes ≈ 1.3 MB per full copy. 2,000 commits/day × 365 = 730,000 versions/year → full copies ≈ 930 GB/year. Deltas of ~3 settings ≈ 200 bytes each → ~150 MB/year. Four orders of magnitude from one representation choice.</p>
-  </aside>
+<h2>The workload decides the design</h2>
+<table class="small">
+<tr><th>Workload property</th><th>Pushes toward</th></tr>
+<tr><td>Few versions, large changes</td><td>Full snapshots</td></tr>
+<tr><td>Many versions, tiny changes</td><td>Deltas or structural sharing</td></tr>
+<tr><td>Reads mostly of the newest version</td><td>Cheap "head"; history may be slow</td></tr>
+<tr><td>Frequent reads of arbitrary old versions</td><td>Every version directly addressable</td></tr>
+<tr><td>Long retention, bounded storage</td><td>Compaction, tiering, thinning of old versions</td></tr>
+<tr><td>Branches and merges</td><td>A version <strong>graph</strong>, not a list</td></tr>
+</table>
+
 </section>
 
-<!-- ====================== PART 2 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 2 · 00:20–01:00</span>
-  <h1>Snapshots, sharing, and<br>the shape of history</h1>
+<span class="kicker">Part 2 · 00:20–01:00</span>
+<h1>Snapshots, sharing, and<br/>the shape of history</h1>
 </section>
-
 <section class="slide">
-  <h2>Mutable vs immutable state</h2>
-  <div class="cols small">
-    <div class="card">
-      <h3>Mutable (update in place)</h3>
-      <ul>
-        <li>One current state; history is gone or lives elsewhere (logs)</li>
-        <li>Readers and writers need coordination</li>
-        <li>"What did it look like at 14:02?" needs extra machinery</li>
-        <li>Cheapest memory; simplest hot path</li>
-      </ul>
-    </div>
-    <div class="card">
-      <h3>Immutable versions</h3>
-      <ul>
-        <li>A commit creates a <strong>new</strong> version; old ones never change</li>
-        <li>A reader holding version <em>v</em> sees a stable snapshot, lock-free</li>
-        <li>Rollback, audit, diff, time travel become simple lookups</li>
-        <li>Cost: every version must be stored, shared or reclaimed</li>
-      </ul>
-    </div>
-  </div>
-  <div class="box key small" style="margin-top:12px"><span class="label">Snapshot semantics</span>get(v, key) returns the same answer forever, whatever happens after v was created — until v is explicitly released.</div>
-  <aside class="notes">
-    <p><span class="t">00:20</span></p>
-    <h4>Concurrency benefit (preview of L11)</h4>
-    <p>A service thread grabs the pointer to the current version and uses it for the whole request. A writer builds a new version and atomically swaps the "current" pointer. Readers never block and never see half a commit. This is read-copy-update (RCU) and the core of MVCC. It is the best argument for immutability in systems — and it only works if old versions are truly never modified (today's bug).</p>
-    <h4>Misconception</h4>
-    <p>"Immutable means slow because everything is copied." Only a naive implementation copies everything. The rest of Part 2 is about <em>not</em> copying.</p>
-  </aside>
+<h2>Mutable vs immutable state</h2>
+<div class="cols small">
+<div class="card">
+<h3>Mutable (update in place)</h3>
+<ul>
+<li>One current state; history is gone or lives elsewhere (logs)</li>
+<li>Readers and writers need coordination</li>
+<li>"What did it look like at 14:02?" needs extra machinery</li>
+<li>Cheapest memory; simplest hot path</li>
+</ul>
+</div>
+<div class="card">
+<h3>Immutable versions</h3>
+<ul>
+<li>A commit creates a <strong>new</strong> version; old ones never change</li>
+<li>A reader holding version <em>v</em> sees a stable snapshot, lock-free</li>
+<li>Rollback, audit, diff, time travel become simple lookups</li>
+<li>Cost: every version must be stored, shared or reclaimed</li>
+</ul>
+</div>
+</div>
+<div class="box key small" style="margin-top:12px"><span class="label">Snapshot semantics</span>get(v, key) returns the same answer forever, whatever happens after v was created — until v is explicitly released.</div>
+
 </section>
-
 <section class="slide">
-  <h2>Three ways to store history</h2>
-  <table class="small">
-    <tr><th></th><th>Full copy</th><th>Delta chain</th><th>Structural sharing (path copy)</th></tr>
-    <tr><td>Commit of <em>c</em> changes</td><td>O(N)</td><td>O(c)</td><td>O(c · log N)</td></tr>
-    <tr><td>Read newest</td><td>O(1)</td><td>O(chain) unless head is materialised</td><td>O(log N)</td></tr>
-    <tr><td>Read old version</td><td>O(1)</td><td>O(distance to checkpoint)</td><td>O(log N)</td></tr>
-    <tr><td>Memory per version</td><td>N</td><td>c</td><td>~ c · log N nodes</td></tr>
-    <tr><td>Drop an old version</td><td>free it</td><td>only if nothing depends on it</td><td>refcount frees unshared nodes</td></tr>
-    <tr><td>Complexity / risk</td><td>trivial</td><td>moderate (checkpoints, compaction)</td><td>higher (sharing, ownership)</td></tr>
-  </table>
-  <aside class="notes">
-    <p><span class="t">00:26</span></p>
-    <h4>Say</h4>
-    <p>"Three points on a trade-off curve between write cost, read cost and memory. The benchmark later puts numbers on each cell, and at least one of them will surprise you."</p>
-    <h4>Hint of the surprise</h4>
-    <p>"c · log N" assumes changes are few and clustered. A change touching 30% of slots scattered randomly touches nearly every leaf — path copying then copies almost everything <em>and</em> pays pointer overhead. Ask the room to predict which row breaks under a bulk migration.</p>
-  </aside>
+<h2>Three ways to store history</h2>
+<table class="small">
+<tr><th></th><th>Full copy</th><th>Delta chain</th><th>Structural sharing (path copy)</th></tr>
+<tr><td>Commit of <em>c</em> changes</td><td>O(N)</td><td>O(c)</td><td>O(c · log N)</td></tr>
+<tr><td>Read newest</td><td>O(1)</td><td>O(chain) unless head is materialised</td><td>O(log N)</td></tr>
+<tr><td>Read old version</td><td>O(1)</td><td>O(distance to checkpoint)</td><td>O(log N)</td></tr>
+<tr><td>Memory per version</td><td>N</td><td>c</td><td>~ c · log N nodes</td></tr>
+<tr><td>Drop an old version</td><td>free it</td><td>only if nothing depends on it</td><td>refcount frees unshared nodes</td></tr>
+<tr><td>Complexity / risk</td><td>trivial</td><td>moderate (checkpoints, compaction)</td><td>higher (sharing, ownership)</td></tr>
+</table>
+
 </section>
-
 <section class="slide">
-  <h2>Structural sharing: copy only the path</h2>
-  <svg viewBox="0 0 1150 340" aria-label="path copying">
-    <defs><marker id="a9" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#14304a"/></marker></defs>
-    <g font-family="Segoe UI, Arial" font-size="16">
-      <text x="120" y="24" fill="#46505e">version 7</text><text x="610" y="24" fill="#0b6e75">version 8 = set slot 5</text>
-      <rect x="120" y="40" width="90" height="40" rx="6" fill="#f5f6f8" stroke="#14304a"/><text x="140" y="66">root</text>
-      <rect x="640" y="40" width="90" height="40" rx="6" fill="#e3f1f2" stroke="#0b6e75" stroke-width="2"/><text x="660" y="66">root'</text>
-      <rect x="40" y="140" width="90" height="40" rx="6" fill="#f5f6f8" stroke="#14304a"/><text x="62" y="166">A</text>
-      <rect x="200" y="140" width="90" height="40" rx="6" fill="#f5f6f8" stroke="#14304a"/><text x="222" y="166">B</text>
-      <rect x="600" y="140" width="90" height="40" rx="6" fill="#e3f1f2" stroke="#0b6e75" stroke-width="2"/><text x="622" y="166">A'</text>
-      <rect x="10" y="250" width="80" height="40" rx="6" fill="#f5f6f8" stroke="#14304a"/><text x="22" y="276">leaf 0</text>
-      <rect x="100" y="250" width="80" height="40" rx="6" fill="#f5f6f8" stroke="#14304a"/><text x="112" y="276">leaf 1</text>
-      <rect x="200" y="250" width="80" height="40" rx="6" fill="#f5f6f8" stroke="#14304a"/><text x="212" y="276">leaf 2</text>
-      <rect x="290" y="250" width="80" height="40" rx="6" fill="#f5f6f8" stroke="#14304a"/><text x="302" y="276">leaf 3</text>
-      <rect x="600" y="250" width="90" height="40" rx="6" fill="#e3f1f2" stroke="#0b6e75" stroke-width="2"/><text x="610" y="276">leaf 1'</text>
-      <g stroke="#14304a" stroke-width="1.8" fill="none">
-        <path d="M150,80 L90,138" marker-end="url(#a9)"/><path d="M180,80 L240,138" marker-end="url(#a9)"/>
-        <path d="M75,180 L55,248" marker-end="url(#a9)"/><path d="M95,180 L135,248" marker-end="url(#a9)"/>
-        <path d="M235,180 L240,248" marker-end="url(#a9)"/><path d="M255,180 L325,248" marker-end="url(#a9)"/>
-      </g>
-      <g stroke="#0b6e75" stroke-width="2.2" fill="none">
-        <path d="M670,80 L650,138" marker-end="url(#a9)"/><path d="M700,80 C560,100 330,110 292,150" marker-end="url(#a9)" stroke-dasharray="6 4"/>
-        <path d="M630,180 C400,220 130,230 60,248" marker-end="url(#a9)" stroke-dasharray="6 4"/><path d="M645,180 L645,248" marker-end="url(#a9)"/>
-      </g>
-      <text x="770" y="160" fill="#0b6e75">new: root', A', leaf 1'  (3 nodes)</text>
-      <text x="770" y="186" fill="#46505e">shared (dashed): B, leaf 0, leaf 2, leaf 3</text>
-      <text x="770" y="212" fill="#46505e">version 7 is untouched</text>
-    </g>
-  </svg>
-  <aside class="notes">
-    <p><span class="t">00:32</span></p>
-    <h4>Explain</h4>
-    <p>A commit copies the nodes on the path from the root to each changed leaf (O(log N) per change) and points the copies at the untouched subtrees of the old version. Both versions are complete trees; they simply share most nodes. This is how Clojure's persistent vectors (32-way tries), Scala's immutable collections and Git's tree objects work.</p>
-    <h4>Our implementation</h4>
-    <p>A 32-ary radix tree over N slots: depth ⌈log₃₂ N⌉ (3 levels for 16,384 slots). Nodes are <code>shared_ptr&lt;const Node&gt;</code>: the <code>const</code> is the promise that shared nodes are never mutated, and the reference count reclaims nodes once no version uses them.</p>
-    <h4>Ask</h4>
-    <p>"How many nodes does version 8 cost if the change touches slots 5 and 6, which sit in the same leaf? And slots 5 and 9,000?" Expected: 3 (same path) vs ~5 (two paths share only the root) — the cost depends on clustering, which depends on the workload.</p>
-  </aside>
+<h2>Structural sharing: copy only the path</h2>
+<svg aria-label="path copying" viewbox="0 0 1150 340">
+<defs><marker id="a9" markerheight="7" markerwidth="7" orient="auto" refx="9" refy="5" viewbox="0 0 10 10"><path d="M0,0L10,5L0,10z" fill="#14304a"></path></marker></defs>
+<g font-family="Segoe UI, Arial" font-size="16">
+<text fill="#46505e" x="120" y="24">version 7</text><text fill="#0b6e75" x="610" y="24">version 8 = set slot 5</text>
+<rect fill="#f5f6f8" height="40" rx="6" stroke="#14304a" width="90" x="120" y="40"></rect><text x="140" y="66">root</text>
+<rect fill="#e3f1f2" height="40" rx="6" stroke="#0b6e75" stroke-width="2" width="90" x="640" y="40"></rect><text x="660" y="66">root'</text>
+<rect fill="#f5f6f8" height="40" rx="6" stroke="#14304a" width="90" x="40" y="140"></rect><text x="62" y="166">A</text>
+<rect fill="#f5f6f8" height="40" rx="6" stroke="#14304a" width="90" x="200" y="140"></rect><text x="222" y="166">B</text>
+<rect fill="#e3f1f2" height="40" rx="6" stroke="#0b6e75" stroke-width="2" width="90" x="600" y="140"></rect><text x="622" y="166">A'</text>
+<rect fill="#f5f6f8" height="40" rx="6" stroke="#14304a" width="80" x="10" y="250"></rect><text x="22" y="276">leaf 0</text>
+<rect fill="#f5f6f8" height="40" rx="6" stroke="#14304a" width="80" x="100" y="250"></rect><text x="112" y="276">leaf 1</text>
+<rect fill="#f5f6f8" height="40" rx="6" stroke="#14304a" width="80" x="200" y="250"></rect><text x="212" y="276">leaf 2</text>
+<rect fill="#f5f6f8" height="40" rx="6" stroke="#14304a" width="80" x="290" y="250"></rect><text x="302" y="276">leaf 3</text>
+<rect fill="#e3f1f2" height="40" rx="6" stroke="#0b6e75" stroke-width="2" width="90" x="600" y="250"></rect><text x="610" y="276">leaf 1'</text>
+<g fill="none" stroke="#14304a" stroke-width="1.8">
+<path d="M150,80 L90,138" marker-end="url(#a9)"></path><path d="M180,80 L240,138" marker-end="url(#a9)"></path>
+<path d="M75,180 L55,248" marker-end="url(#a9)"></path><path d="M95,180 L135,248" marker-end="url(#a9)"></path>
+<path d="M235,180 L240,248" marker-end="url(#a9)"></path><path d="M255,180 L325,248" marker-end="url(#a9)"></path>
+</g>
+<g fill="none" stroke="#0b6e75" stroke-width="2.2">
+<path d="M670,80 L650,138" marker-end="url(#a9)"></path><path d="M700,80 C560,100 330,110 292,150" marker-end="url(#a9)" stroke-dasharray="6 4"></path>
+<path d="M630,180 C400,220 130,230 60,248" marker-end="url(#a9)" stroke-dasharray="6 4"></path><path d="M645,180 L645,248" marker-end="url(#a9)"></path>
+</g>
+<text fill="#0b6e75" x="770" y="160">new: root', A', leaf 1'  (3 nodes)</text>
+<text fill="#46505e" x="770" y="186">shared (dashed): B, leaf 0, leaf 2, leaf 3</text>
+<text fill="#46505e" x="770" y="212">version 7 is untouched</text>
+</g>
+</svg>
+
 </section>
-
 <section class="slide">
-  <h2>Copy-on-write: sharing until someone writes</h2>
-  <div class="cols small">
-    <div>
-      <ul>
-        <li>Share a buffer/page/object between owners; copy only when one of them <strong>writes</strong></li>
-        <li>Examples: <code>fork()</code> memory pages, VM/container image layers, ZFS/Btrfs snapshots, Qt implicitly shared containers</li>
-        <li>Decision rule: "am I the only owner?" → write in place; else copy first</li>
-      </ul>
-    </div>
-    <div class="box warn">
-      <span class="label">The classic trap</span>
+<h2>Copy-on-write: sharing until someone writes</h2>
+<div class="cols small">
+<div>
+<ul>
+<li>Share a buffer/page/object between owners; copy only when one of them <strong>writes</strong></li>
+<li>Examples: <code>fork()</code> memory pages, VM/container image layers, ZFS/Btrfs snapshots, Qt implicitly shared containers</li>
+<li>Decision rule: "am I the only owner?" → write in place; else copy first</li>
+</ul>
+</div>
+<div class="box warn">
+<span class="label">The classic trap</span>
       "Only owner" must mean <strong>nobody can observe this data</strong> — not "nobody is likely to", not "only the newest version". A shared pointer's use count can be 1 while a <em>parent node</em> that points to it is shared by two versions.
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:38</span></p>
-    <h4>Say</h4>
-    <p>"Copy-on-write is structural sharing's lazy cousin. Its correctness rests entirely on one question: is this object observable by anyone else? Getting that question wrong is the most common bug in persistent structures — and today's lab contains a version of it."</p>
-    <h4>Concurrency caution</h4>
-    <p><code>std::string</code> used copy-on-write in pre-C++11 libstdc++; it was removed because the reference count made COW strings expensive and error-prone under threads. Sharing always needs an ownership story that holds under concurrency.</p>
-  </aside>
-</section>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Versions form a graph</h2>
-  <div class="cols wide-r">
-    <div class="small">
-      <ul>
-        <li>Version id = stable name for an immutable state</li>
-        <li><strong>Linear</strong> history: undo stacks, audit logs</li>
-        <li><strong>Branches</strong>: staged rollouts, experiments, drafts</li>
-        <li><strong>Merges</strong> need a policy for conflicts (not today)</li>
-        <li>Ids: sequential numbers (need a coordinator) or content hashes (Git: same content → same id, deduplication for free)</li>
-      </ul>
-    </div>
-    <svg viewBox="0 0 600 240">
-      <defs><marker id="b9" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#14304a"/></marker></defs>
-      <g font-family="Consolas,monospace" font-size="16">
-        <g fill="#e3f1f2" stroke="#0b6e75" stroke-width="2"><circle cx="40" cy="100" r="24"/><circle cx="140" cy="100" r="24"/><circle cx="240" cy="100" r="24"/><circle cx="340" cy="100" r="24"/><circle cx="440" cy="100" r="24"/></g>
-        <g fill="#fff4e0" stroke="#9a5b00" stroke-width="2"><circle cx="340" cy="200" r="24"/><circle cx="440" cy="200" r="24"/></g>
-        <text x="32" y="106">v1</text><text x="132" y="106">v2</text><text x="232" y="106">v3</text><text x="332" y="106">v4</text><text x="432" y="106">v6</text>
-        <text x="332" y="206">v5</text><text x="432" y="206">v7</text>
-        <g stroke="#14304a" stroke-width="2" fill="none"><path d="M64,100 L114,100" marker-end="url(#b9)"/><path d="M164,100 L214,100" marker-end="url(#b9)"/><path d="M264,100 L314,100" marker-end="url(#b9)"/><path d="M364,100 L414,100" marker-end="url(#b9)"/><path d="M258,116 L320,186" marker-end="url(#b9)"/><path d="M364,200 L414,200" marker-end="url(#b9)"/></g>
-        <text x="480" y="106" font-family="Segoe UI" fill="#46505e">main</text><text x="480" y="206" font-family="Segoe UI" fill="#9a5b00">5% rollout</text>
-      </g>
-    </svg>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:43</span></p>
-    <h4>Lifecycle question to plant</h4>
-    <p>"If v3 is older than 30 days, can we delete it?" With full copies: yes. With deltas: v4 and v5 are stored as changes relative to v3 — deleting v3's delta breaks them. With structural sharing: v3's unique nodes are freed, shared ones survive. The version graph turns "delete" into a dependency problem (Lecture 7 again).</p>
-    <h4>Content addressing</h4>
-    <p>Git names objects by the hash of their content: identical subtrees are automatically shared across commits and branches, and integrity is checkable. Cost: hashing on every write and ids that are not ordered in time.</p>
-  </aside>
-</section>
+<h2>Versions form a graph</h2>
+<div class="cols wide-r">
+<div class="small">
+<ul>
+<li>Version id = stable name for an immutable state</li>
+<li><strong>Linear</strong> history: undo stacks, audit logs</li>
+<li><strong>Branches</strong>: staged rollouts, experiments, drafts</li>
+<li><strong>Merges</strong> need a policy for conflicts (not today)</li>
+<li>Ids: sequential numbers (need a coordinator) or content hashes (Git: same content → same id, deduplication for free)</li>
+</ul>
+</div>
+<svg viewbox="0 0 600 240">
+<defs><marker id="b9" markerheight="7" markerwidth="7" orient="auto" refx="9" refy="5" viewbox="0 0 10 10"><path d="M0,0L10,5L0,10z" fill="#14304a"></path></marker></defs>
+<g font-family="Consolas,monospace" font-size="16">
+<g fill="#e3f1f2" stroke="#0b6e75" stroke-width="2"><circle cx="40" cy="100" r="24"></circle><circle cx="140" cy="100" r="24"></circle><circle cx="240" cy="100" r="24"></circle><circle cx="340" cy="100" r="24"></circle><circle cx="440" cy="100" r="24"></circle></g>
+<g fill="#fff4e0" stroke="#9a5b00" stroke-width="2"><circle cx="340" cy="200" r="24"></circle><circle cx="440" cy="200" r="24"></circle></g>
+<text x="32" y="106">v1</text><text x="132" y="106">v2</text><text x="232" y="106">v3</text><text x="332" y="106">v4</text><text x="432" y="106">v6</text>
+<text x="332" y="206">v5</text><text x="432" y="206">v7</text>
+<g fill="none" stroke="#14304a" stroke-width="2"><path d="M64,100 L114,100" marker-end="url(#b9)"></path><path d="M164,100 L214,100" marker-end="url(#b9)"></path><path d="M264,100 L314,100" marker-end="url(#b9)"></path><path d="M364,100 L414,100" marker-end="url(#b9)"></path><path d="M258,116 L320,186" marker-end="url(#b9)"></path><path d="M364,200 L414,200" marker-end="url(#b9)"></path></g>
+<text fill="#46505e" font-family="Segoe UI" x="480" y="106">main</text><text fill="#9a5b00" font-family="Segoe UI" x="480" y="206">5% rollout</text>
+</g>
+</svg>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Undo/redo: four models</h2>
-  <table class="small">
-    <tr><th>Model</th><th>Stores</th><th>Undo cost</th><th>Watch out for</th></tr>
-    <tr><td>Command log</td><td>Operations (+ inverses)</td><td>Apply inverse</td><td>Non-invertible operations; replay must be deterministic</td></tr>
-    <tr><td>State snapshots</td><td>Whole states</td><td>O(1) switch</td><td>Memory × history length</td></tr>
-    <tr><td>Deltas</td><td>Changed parts only</td><td>Apply reverse delta</td><td>Long chains; checkpoints</td></tr>
-    <tr><td>Structural sharing</td><td>Versions sharing nodes</td><td>O(1) switch</td><td>Ownership, pointer overhead</td></tr>
-  </table>
-  <div class="box q small" style="margin-top:12px"><span class="label">Ask</span>A photo editor applies a blur to a 50 MB image. Which model would you use for its undo, and why not the others?</div>
-  <aside class="notes">
-    <p><span class="t">00:50</span></p>
-    <h4>Expected answer</h4>
-    <p>Blur is not invertible: a command log would need to store the original pixels anyway. Full snapshots of 50 MB per step exhaust memory after ~20 steps. Practical answer: tile the image and snapshot only the tiles an operation touches (structural sharing at tile granularity) — or store the "before" tiles as a reverse delta. Text editors typically use command logs (inserts and deletes are cheap to invert) or piece tables.</p>
-    <h4>Teaching point</h4>
-    <p>The right undo model depends on operation invertibility and change size — i.e. on the workload, again.</p>
-    <h4>Transition</h4>
-    <p>"Every model so far only adds. Now the uncomfortable half: removing versions, disks and crashes."</p>
-  </aside>
+<h2>Undo/redo: four models</h2>
+<table class="small">
+<tr><th>Model</th><th>Stores</th><th>Undo cost</th><th>Watch out for</th></tr>
+<tr><td>Command log</td><td>Operations (+ inverses)</td><td>Apply inverse</td><td>Non-invertible operations; replay must be deterministic</td></tr>
+<tr><td>State snapshots</td><td>Whole states</td><td>O(1) switch</td><td>Memory × history length</td></tr>
+<tr><td>Deltas</td><td>Changed parts only</td><td>Apply reverse delta</td><td>Long chains; checkpoints</td></tr>
+<tr><td>Structural sharing</td><td>Versions sharing nodes</td><td>O(1) switch</td><td>Ownership, pointer overhead</td></tr>
+</table>
+<div class="box q small" style="margin-top:12px"><span class="label">Ask</span>A photo editor applies a blur to a 50 MB image. Which model would you use for its undo, and why not the others?</div>
+
 </section>
 
-<!-- ====================== PART 3 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 3 · 01:00–01:30</span>
-  <h1>Lifecycle: ownership, reclamation,<br>compaction, disks and crashes</h1>
+<span class="kicker">Part 3 · 01:00–01:30</span>
+<h1>Lifecycle: ownership, reclamation,<br/>compaction, disks and crashes</h1>
 </section>
-
 <section class="slide">
-  <h2>Who owns an old version?</h2>
-  <div class="cols small">
-    <div>
-      <ul>
-        <li>A reader holding version <em>v</em> must be able to finish, even if <em>v</em> is "deleted" meanwhile</li>
-        <li><strong>Reference counting</strong> (<code>shared_ptr</code>): a node is freed when its last owner goes — deterministic, but costs an atomic operation per copy and cannot free cycles</li>
-        <li><strong>Tracing GC</strong> (JVM, Git <code>gc</code>): free what is unreachable from live roots — batch cost, pauses</li>
-        <li><strong>Epochs / leases</strong>: free after all readers of an epoch have left (RCU)</li>
-      </ul>
-    </div>
-    <div class="box key">
-      <span class="label">Invariant</span>
+<h2>Who owns an old version?</h2>
+<div class="cols small">
+<div>
+<ul>
+<li>A reader holding version <em>v</em> must be able to finish, even if <em>v</em> is "deleted" meanwhile</li>
+<li><strong>Reference counting</strong> (<code>shared_ptr</code>): a node is freed when its last owner goes — deterministic, but costs an atomic operation per copy and cannot free cycles</li>
+<li><strong>Tracing GC</strong> (JVM, Git <code>gc</code>): free what is unreachable from live roots — batch cost, pauses</li>
+<li><strong>Epochs / leases</strong>: free after all readers of an epoch have left (RCU)</li>
+</ul>
+</div>
+<div class="box key">
+<span class="label">Invariant</span>
       A released or compacted version is never readable by accident: either <code>get</code> fails with a clear error, or the data is still valid for readers who held it.
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:00</span></p>
-    <h4>Say</h4>
-    <p>"Immutability doesn't remove the lifetime problem; it moves it. Instead of 'who may write this?' you ask 'who may still read this?'. In C++ that question is yours to answer; in a GC language the runtime answers it — at a cost."</p>
-    <h4>Our stores</h4>
-    <ul>
-      <li>Full copy and path copy: <code>release(v)</code> drops a root; <code>shared_ptr</code> frees whatever is no longer shared.</li>
-      <li>Delta chain: a version whose children still depend on it cannot be freed on its own. <code>release</code> refuses; <code>retire</code> marks it unneeded; <code>compact</code> materialises a descendant and reclaims retired ancestors.</li>
-    </ul>
-    <h4>Dangling handles</h4>
-    <p>Version ids are plain integers in our API. After release, <code>get</code> throws <code>out_of_range</code>. Returning references into a version would dangle after release — the Lecture 1 lesson, applied to history.</p>
-  </aside>
-</section>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Compaction and memory amplification</h2>
-  <div class="cols small">
-    <div>
-      <ul>
-        <li><strong>Amplification</strong> = bytes stored ÷ bytes of live, useful state</li>
-        <li>Sources: many versions, per-node pointer overhead, partially shared nodes, fragmentation</li>
-        <li><strong>Compaction</strong>: rewrite history into a smaller form
+<h2>Compaction and memory amplification</h2>
+<div class="cols small">
+<div>
+<ul>
+<li><strong>Amplification</strong> = bytes stored ÷ bytes of live, useful state</li>
+<li>Sources: many versions, per-node pointer overhead, partially shared nodes, fragmentation</li>
+<li><strong>Compaction</strong>: rewrite history into a smaller form
           <ul>
-            <li>materialise a checkpoint, drop the chain before it</li>
-            <li>thin old versions (keep one per day after 30 days)</li>
-            <li>merge small segments (L5), pack deltas (Git <code>gc</code>)</li>
-          </ul></li>
-      </ul>
-    </div>
-    <div class="box warn">
-      <span class="label">Compaction is a product decision</span>
+<li>materialise a checkpoint, drop the chain before it</li>
+<li>thin old versions (keep one per day after 30 days)</li>
+<li>merge small segments (L5), pack deltas (Git <code>gc</code>)</li>
+</ul></li>
+</ul>
+</div>
+<div class="box warn">
+<span class="label">Compaction is a product decision</span>
       Thinning deletes history someone may need (audit, legal hold). The retention policy must be explicit, and compaction must never remove a version still referenced by a reader, a branch or a hold.
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:07</span></p>
-    <h4>Say</h4>
-    <p>"Every immutable system eventually runs a compactor. Its cost is real (I/O, CPU, pauses) and it is where data-loss bugs hide, because it is the one component allowed to delete."</p>
-    <h4>Examples</h4>
-    <p>LSM storage engines (LevelDB, RocksDB) have write amplification from repeated compaction; PostgreSQL's VACUUM reclaims dead row versions — a table that is never vacuumed "bloats"; Kafka log compaction keeps only the latest value per key; Git <code>gc</code> packs loose objects into deltas.</p>
-    <h4>Measure it</h4>
-    <p>The benchmark reports "heap after trimming to the last 10 versions" and the time it takes. That is a compaction benchmark in miniature.</p>
-  </aside>
-</section>
+</div>
 
+</section>
 <section class="slide">
-  <h2>On disk: persistence and crashes</h2>
-  <div class="cols small">
-    <div>
-      <ul>
-        <li>Immutable data is easy to persist: <strong>append</strong> new versions/nodes, never overwrite</li>
-        <li>A version is published only after its data is durable: write nodes → flush → write the new root pointer → flush</li>
-        <li>After a crash: the last durable root is a consistent snapshot; partial writes after it are garbage to collect</li>
-      </ul>
-    </div>
-    <div class="box key">
-      <span class="label">Why this is attractive</span>
+<h2>On disk: persistence and crashes</h2>
+<div class="cols small">
+<div>
+<ul>
+<li>Immutable data is easy to persist: <strong>append</strong> new versions/nodes, never overwrite</li>
+<li>A version is published only after its data is durable: write nodes → flush → write the new root pointer → flush</li>
+<li>After a crash: the last durable root is a consistent snapshot; partial writes after it are garbage to collect</li>
+</ul>
+</div>
+<div class="box key">
+<span class="label">Why this is attractive</span>
       No torn updates of live data, so recovery = "find the last complete root". Copy-on-write file systems and append-only B-trees (e.g. LMDB-style) rely on exactly this.
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:13</span></p>
-    <h4>Connect to Lecture 8</h4>
-    <p>"Journal first, then act" from the workflow engine and "data first, then root pointer" here are the same ordering principle: the commit point is one small atomic write, and everything it points to must already be durable.</p>
-    <h4>Serialization concerns (conceptual)</h4>
-    <p>In-memory pointers must become offsets or content hashes on disk; shared subtrees are written once and referenced many times. The format is part of the contract: old files must remain readable after upgrades (versioned formats).</p>
-    <h4>Keep it conceptual</h4>
-    <p>Do not go into fsync semantics or file-system specifics — mention only that "flush" really means "durable on stable storage", which operating systems make surprisingly hard to guarantee.</p>
-  </aside>
-</section>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Snapshot isolation, conceptually</h2>
-  <div class="cols small">
-    <div>
-      <ul>
-        <li>Each reader works on the version that was current when it started</li>
-        <li>Writers create new versions; readers never block writers or each other</li>
-        <li>Two writers from the same base: first commit wins; the second must detect the conflict and retry on the new version</li>
-      </ul>
-    </div>
-    <div class="box warn">
-      <span class="label">Not a database course — one warning</span>
+<h2>Snapshot isolation, conceptually</h2>
+<div class="cols small">
+<div>
+<ul>
+<li>Each reader works on the version that was current when it started</li>
+<li>Writers create new versions; readers never block writers or each other</li>
+<li>Two writers from the same base: first commit wins; the second must detect the conflict and retry on the new version</li>
+</ul>
+</div>
+<div class="box warn">
+<span class="label">Not a database course — one warning</span>
       Snapshots give each reader a consistent view, not global correctness: two concurrent writers can each keep a rule true on their own snapshot and jointly break it ("write skew").
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:18</span></p>
-    <h4>Example of write skew for the config platform</h4>
-    <p>Rule: "at least one of the two payment regions must be enabled". Two operators, each on the same snapshot, disable a different region. Each commit is valid on its snapshot; together they disable both. Detecting this needs validation against the latest version at commit time (a compare-and-swap on the current version id) or a lock. One sentence is enough; do not go further.</p>
-    <h4>API consequence</h4>
-    <p>A commit API that takes an explicit parent version (<code>commit(parent, changes)</code>) makes this visible: if <code>parent</code> is not the current head, the caller knows it is committing on a stale base and can choose to rebase, merge or fail.</p>
-  </aside>
-</section>
+</div>
 
+</section>
 <section class="slide">
-  <h2>API design questions</h2>
-  <pre class="sm"><code>Version commit(Version parent, std::vector&lt;Change&gt; changes);  // new id, parent unchanged
+<h2>API design questions</h2>
+<pre class="sm"><code>Version commit(Version parent, std::vector&lt;Change&gt; changes);  // new id, parent unchanged
 Value   get(Version v, std::size_t slot) const;              // throws if v unknown/released
 bool    release(Version v);                                   // false if not allowed
 bool    retire(Version v);   std::size_t compact(Version v);  // delta chain lifecycle</code></pre>
-  <div class="cols small" style="margin-top:8px">
-    <ul>
-      <li>Are versions mutable after creation? (No — ever?)</li>
-      <li>Are ids stable across restarts and compaction?</li>
-      <li>Can a version be deleted while descendants exist?</li>
-    </ul>
-    <ul>
-      <li>What happens to a reader of a compacted version?</li>
-      <li>Is "branch" a separate operation or just <code>commit</code> on an older parent?</li>
-      <li>What exactly does "snapshot" guarantee?</li>
-    </ul>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:22</span></p>
-    <h4>Discuss two quickly</h4>
-    <ul>
-      <li><strong>Delete with descendants.</strong> Options: refuse (our delta chain), cascade (dangerous), rebase descendants onto a materialised copy (costly but clean), or reference-count versions so storage goes only when no descendant needs it. Each is defensible; silence is not.</li>
-      <li><strong>Branch.</strong> Our API has no separate <code>branch()</code>: committing on any live parent creates a branch. Simpler API, but callers may branch accidentally (stale parent). A separate <code>branch()</code> makes intent explicit. That trade-off (explicit vs minimal API) recurs everywhere.</li>
-    </ul>
-  </aside>
-</section>
+<div class="cols small" style="margin-top:8px">
+<ul>
+<li>Are versions mutable after creation? (No — ever?)</li>
+<li>Are ids stable across restarts and compaction?</li>
+<li>Can a version be deleted while descendants exist?</li>
+</ul>
+<ul>
+<li>What happens to a reader of a compacted version?</li>
+<li>Is "branch" a separate operation or just <code>commit</code> on an older parent?</li>
+<li>What exactly does "snapshot" guarantee?</li>
+</ul>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Invariants of a versioned store</h2>
-  <ol class="small">
-    <li><strong>Historical versions never change</strong>: get(v, i) is the same forever until v is released</li>
-    <li><strong>Sharing never leaks mutation</strong>: no shared node is written after it is published</li>
-    <li><strong>Ancestry stays valid</strong>: every live version can be reconstructed (its parents/deltas/checkpoints exist)</li>
-    <li><strong>References stay safe</strong>: a holder of v can finish reading, or gets a clear error — never another version's data</li>
-    <li><strong>Released/compacted data is not reachable</strong> through the API</li>
-  </ol>
-  <div class="box key small">Test #1 with an independent oracle: record every version's full state when it is created, then check them all <em>after</em> the whole history has been built.</div>
-  <aside class="notes">
-    <p><span class="t">01:27</span></p>
-    <h4>Why "after the whole history"</h4>
-    <p>A test that checks version v right after creating it passes even if later commits corrupt v. The mutation-leak bug only shows up when you look back. The test file does exactly this, over a branching history.</p>
-    <h4>Transition to break</h4>
-    <p>"After the break: one of the three stores in your starter code violates invariant #1 and #2. Find it."</p>
-  </aside>
+<h2>Invariants of a versioned store</h2>
+<ol class="small">
+<li><strong>Historical versions never change</strong>: get(v, i) is the same forever until v is released</li>
+<li><strong>Sharing never leaks mutation</strong>: no shared node is written after it is published</li>
+<li><strong>Ancestry stays valid</strong>: every live version can be reconstructed (its parents/deltas/checkpoints exist)</li>
+<li><strong>References stay safe</strong>: a holder of v can finish reading, or gets a clear error — never another version's data</li>
+<li><strong>Released/compacted data is not reachable</strong> through the API</li>
+</ol>
+<div class="box key small">Test #1 with an independent oracle: record every version's full state when it is created, then check them all <em>after</em> the whole history has been built.</div>
+
+</section>
+<section class="slide divider">
+<span class="kicker">01:30–01:40</span>
+<h1>Break — 10 minutes</h1>
+<p>Download <code>Lecture_09/Student_Resources/</code> · Build <code>versioned_test.cpp</code></p>
 </section>
 
 <section class="slide divider">
-  <span class="kicker">01:30–01:40</span>
-  <h1>Break — 10 minutes</h1>
-  <p>Download <code>Lecture_09/Student_Resources/</code> · Build <code>versioned_test.cpp</code></p>
+<span class="kicker">Part 4 · 01:40–02:15</span>
+<h1>Hands-on: find the snapshot violation</h1>
 </section>
-
-<!-- ====================== PART 4 ====================== -->
-<section class="slide divider">
-  <span class="kicker">Part 4 · 01:40–02:15</span>
-  <h1>Hands-on: find the snapshot violation</h1>
-</section>
-
 <section class="slide">
-  <h2>Lab brief (teams)</h2>
-  <div class="cols wide-l small">
-    <div>
-      <h3>A. Debug (15 min)</h3>
-      <ol>
-        <li>Run <code>versioned_test.cpp</code>. One store changes history.</li>
-        <li>Find the mechanism. Why might a developer have written it that way?</li>
-        <li>Fix it. Which invariants were broken?</li>
-      </ol>
-      <h3>B. Predict (15 min, before running the benchmark)</h3>
-      <p>For each store, under history A (20 versions × 30% changed) and B (1,000 versions × 1 slot): commit cost, memory, reading an old version, reading the newest, cost of keeping only the last 10.</p>
-    </div>
-    <div class="box plain xsmall">
-      <span class="label">Build</span>
-      <code>g++ -std=c++20 -O1 -g versioned_test.cpp</code><br>
-      <code>g++ -std=c++20 -O2 versioned_bench.cpp</code><br><br>
-      <span class="label">Stores</span>
+<h2>Lab brief (teams)</h2>
+<div class="cols wide-l small">
+<div>
+<h3>A. Debug (15 min)</h3>
+<ol>
+<li>Run <code>versioned_test.cpp</code>. One store changes history.</li>
+<li>Find the mechanism. Why might a developer have written it that way?</li>
+<li>Fix it. Which invariants were broken?</li>
+</ol>
+<h3>B. Predict (15 min, before running the benchmark)</h3>
+<p>For each store, under history A (20 versions × 30% changed) and B (1,000 versions × 1 slot): commit cost, memory, reading an old version, reading the newest, cost of keeping only the last 10.</p>
+</div>
+<div class="box plain xsmall">
+<span class="label">Build</span>
+<code>g++ -std=c++20 -O1 -g versioned_test.cpp</code><br/>
+<code>g++ -std=c++20 -O2 versioned_bench.cpp</code><br/><br/>
+<span class="label">Stores</span>
       FullCopyStore · DeltaChainStore(N, every) · PathCopyStore
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:40</span></p>
-    <h4>The bug (INSTRUCTOR ONLY)</h4>
-    <p><code>PathCopyStore::commit</code> has a "fast path": if the parent is the newest version, it mutates the tree in place via <code>const_cast</code> and lets the new version share the root. Consequences: (1) the parent version changes (history mutated); (2) worse, the initial tree shares one all-zero leaf among all slots, so an in-place write also changes other slots in <em>every</em> version, including version 0 — which is exactly what the test prints.</p>
-    <h4>Why it was written</h4>
-    <p>"Appending to the head is the common case and nobody reads old versions while we write" — a workload assumption turned into a correctness shortcut, as a performance optimisation without a benchmark. Review signal: <code>const_cast</code> on anything reachable from <code>shared_ptr&lt;const T&gt;</code>.</p>
-    <h4>Fix</h4>
-    <p>Delete the fast path; always path-copy (solution file). If a real in-place optimisation is wanted: only for nodes created within the same commit (a "transient"), never for published nodes.</p>
-    <h4>Hints</h4>
-    <ol><li>"Which store's failure message mentions version 0?"</li><li>"Look for <code>const_cast</code>."</li><li>"What else points to the leaf you just wrote?"</li></ol>
-  </aside>
+</div>
+
 </section>
 
-<!-- ====================== PART 5 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 5 · 02:15–02:40</span>
-  <h1>Experiment: where does each<br>design become unattractive?</h1>
+<span class="kicker">Part 5 · 02:15–02:40</span>
+<h1>Experiment: where does each<br/>design become unattractive?</h1>
 </section>
-
 <section class="slide">
-  <h2>Measured: N = 16,384 slots</h2>
-  <table class="tight small">
-    <tr><th>History</th><th>Design</th><th class="num">commit µs/version</th><th class="num">heap MB</th><th class="num">read old ns</th><th class="num">read newest ns</th><th class="num">MB after trim</th></tr>
-    <tr><td>A: 20 × 30%</td><td>full copy</td><td class="num">289</td><td class="num">2.8</td><td class="num">4.7</td><td class="num">1.1</td><td class="num">1.3</td></tr>
-    <tr><td></td><td>delta chain</td><td class="num">251</td><td class="num">1.5</td><td class="num">218</td><td class="num">251</td><td class="num">0.7</td></tr>
-    <tr><td></td><td>path copy</td><td class="num">361</td><td class="num">3.5</td><td class="num">12.5</td><td class="num">2.8</td><td class="num">1.7</td></tr>
-    <tr><td>B: 1,000 × 1</td><td>full copy</td><td class="num">45</td><td class="num"><strong>131</strong></td><td class="num">17</td><td class="num">1.3</td><td class="num">1.3</td></tr>
-    <tr><td></td><td>delta chain</td><td class="num">0.22</td><td class="num">0.2</td><td class="num"><strong>2,544</strong></td><td class="num"><strong>5,297</strong></td><td class="num">0.2</td></tr>
-    <tr><td></td><td>delta, ckpt 32</td><td class="num">1.5</td><td class="num">4.3</td><td class="num">122</td><td class="num">28</td><td class="num">0.3</td></tr>
-    <tr><td></td><td>path copy</td><td class="num">1.4</td><td class="num">1.5</td><td class="num">7.3</td><td class="num">3.0</td><td class="num">0.2</td></tr>
-  </table>
-  <p class="xsmall muted" style="margin-top:6px">Heap = live payload bytes (counting allocator). Reads: 200,000 random (version, slot) pairs, median of 3. One machine, MinGW g++ 15 -O2. <code>versioned_bench.cpp</code></p>
-  <aside class="notes">
-    <p><span class="t">02:15</span> Run it live (~5 s) and compare with the teams' predictions.</p>
-    <h4>Where each becomes unattractive</h4>
-    <ul>
-      <li><strong>Full copy</strong>: history B — 131 MB for 1,000 versions of a 128 KB array. Scale to a year of commits and it is impossible. Unbeatable reads.</li>
-      <li><strong>Delta chain without checkpoints</strong>: reading anything in B costs microseconds because every read walks the chain — even the newest version (5.3 µs). Commits are almost free. Checkpoints every 32 versions cut reads ~20× (old versions) to ~190× (newest) for 4.3 MB.</li>
-      <li><strong>Path copy</strong>: great for B (1.5 MB, fast reads), but in A it copies <em>more</em> than full copy (3.5 vs 2.8 MB) and commits are slower. 30% random changes touch every leaf; sharing buys nothing and pointers cost extra.</li>
-    </ul>
-    <h4>Workloads C and D (from the brief)</h4>
-    <p>C (many old reads): full copy if memory allows, otherwise path copy; never an unbounded delta chain. D (mostly newest): anything with a cheap head. A popular real design is a mutable materialised head plus reverse deltas for history (undo logs).</p>
-  </aside>
-</section>
+<h2>Measured: N = 16,384 slots</h2>
+<table class="tight small">
+<tr><th>History</th><th>Design</th><th class="num">commit µs/version</th><th class="num">heap MB</th><th class="num">read old ns</th><th class="num">read newest ns</th><th class="num">MB after trim</th></tr>
+<tr><td>A: 20 × 30%</td><td>full copy</td><td class="num">289</td><td class="num">2.8</td><td class="num">4.7</td><td class="num">1.1</td><td class="num">1.3</td></tr>
+<tr><td></td><td>delta chain</td><td class="num">251</td><td class="num">1.5</td><td class="num">218</td><td class="num">251</td><td class="num">0.7</td></tr>
+<tr><td></td><td>path copy</td><td class="num">361</td><td class="num">3.5</td><td class="num">12.5</td><td class="num">2.8</td><td class="num">1.7</td></tr>
+<tr><td>B: 1,000 × 1</td><td>full copy</td><td class="num">45</td><td class="num"><strong>131</strong></td><td class="num">17</td><td class="num">1.3</td><td class="num">1.3</td></tr>
+<tr><td></td><td>delta chain</td><td class="num">0.22</td><td class="num">0.2</td><td class="num"><strong>2,544</strong></td><td class="num"><strong>5,297</strong></td><td class="num">0.2</td></tr>
+<tr><td></td><td>delta, ckpt 32</td><td class="num">1.5</td><td class="num">4.3</td><td class="num">122</td><td class="num">28</td><td class="num">0.3</td></tr>
+<tr><td></td><td>path copy</td><td class="num">1.4</td><td class="num">1.5</td><td class="num">7.3</td><td class="num">3.0</td><td class="num">0.2</td></tr>
+</table>
+<p class="xsmall muted" style="margin-top:6px">Heap = live payload bytes (counting allocator). Reads: 200,000 random (version, slot) pairs, median of 3. One machine, MinGW g++ 15 -O2. <code>versioned_bench.cpp</code></p>
 
+</section>
 <section class="slide">
-  <h2>What the experiment does not show</h2>
-  <div class="cols small">
-    <ul>
-      <li>Allocator overhead and fragmentation (payload bytes only)</li>
-      <li>Disk cost: serialisation, write amplification, fsync</li>
-      <li>Concurrency: readers holding versions while writers commit</li>
-      <li>Clustered changes (real configs change related keys together)</li>
-    </ul>
-    <ul>
-      <li>Branching histories (the benchmark is linear)</li>
-      <li>Retention over months: compaction running continuously</li>
-      <li>Cost of <code>shared_ptr</code> atomic refcounts under threads</li>
-      <li>Other N, other machines</li>
-    </ul>
-  </div>
-  <div class="box q small" style="margin-top:12px"><span class="label">Ask</span>For the config platform, which missing measurement would you run first, and what result would change your choice?</div>
-  <aside class="notes">
-    <p><span class="t">02:30</span></p>
-    <h4>Expected answer</h4>
-    <p>A realistic commit trace (clustering of changed keys + commit sizes) and a year-long retention simulation with compaction. If commits are clustered and small, path copy or delta + checkpoints win; if bulk migrations dominate storage, full snapshots at migrations + deltas between them (a hybrid). Refcount cost matters only if many threads copy version handles at high rates.</p>
-  </aside>
+<h2>What the experiment does not show</h2>
+<div class="cols small">
+<ul>
+<li>Allocator overhead and fragmentation (payload bytes only)</li>
+<li>Disk cost: serialisation, write amplification, fsync</li>
+<li>Concurrency: readers holding versions while writers commit</li>
+<li>Clustered changes (real configs change related keys together)</li>
+</ul>
+<ul>
+<li>Branching histories (the benchmark is linear)</li>
+<li>Retention over months: compaction running continuously</li>
+<li>Cost of <code>shared_ptr</code> atomic refcounts under threads</li>
+<li>Other N, other machines</li>
+</ul>
+</div>
+<div class="box q small" style="margin-top:12px"><span class="label">Ask</span>For the config platform, which missing measurement would you run first, and what result would change your choice?</div>
+
 </section>
 
-<!-- ====================== PART 6 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 6 · 02:40–03:00</span>
-  <h1>Prototype checkpoint — due tonight</h1>
+<span class="kicker">Part 6 · 02:40–03:00</span>
+<h1>Prototype checkpoint — due tonight</h1>
 </section>
-
 <section class="slide">
-  <h2>What "working prototype" means</h2>
-  <div class="cols small">
-    <div class="box good">
-      <span class="label">Should demonstrate</span>
-      <ul class="xsmall">
-        <li>Core behaviour of your component</li>
-        <li>The major public APIs from your design document</li>
-        <li>At least one working end-to-end path (build → run → observable result)</li>
-        <li>The baseline and your main design behind the same API</li>
-        <li>Initial tests, runnable with one command</li>
-        <li>Known limitations, written down (<code>CHECKPOINT.md</code>)</li>
-      </ul>
-    </div>
-    <div class="box plain">
-      <span class="label">Does not need</span>
-      <ul class="xsmall">
-        <li>Final optimisation</li>
-        <li>The complete benchmark campaign (due 5 Dec)</li>
-        <li>A polished report</li>
-        <li>Every optional feature</li>
-      </ul>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">02:40</span></p>
-    <h4>Mini-inspection (12 minutes)</h4>
-    <p>Each team opens its repository and answers, in writing: (1) the exact command that builds and runs the tests; (2) which API calls work end to end today; (3) which invariant is checked in code; (4) the biggest known limitation. Walk around and ask two teams to run their command live. If it does not work from a clean clone, that is today's most important fix.</p>
-    <h4>Connect to today</h4>
-    <p>"Your checkpoint is a version. Tag it (<code>checkpoint-prototype</code>) — an immutable, named snapshot you can return to and compare against."</p>
-  </aside>
-</section>
+<h2>What "working prototype" means</h2>
+<div class="cols small">
+<div class="box good">
+<span class="label">Should demonstrate</span>
+<ul class="xsmall">
+<li>Core behaviour of your component</li>
+<li>The major public APIs from your design document</li>
+<li>At least one working end-to-end path (build → run → observable result)</li>
+<li>The baseline and your main design behind the same API</li>
+<li>Initial tests, runnable with one command</li>
+<li>Known limitations, written down (<code>CHECKPOINT.md</code>)</li>
+</ul>
+</div>
+<div class="box plain">
+<span class="label">Does not need</span>
+<ul class="xsmall">
+<li>Final optimisation</li>
+<li>The complete benchmark campaign (due 5 Dec)</li>
+<li>A polished report</li>
+<li>Every optional feature</li>
+</ul>
+</div>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Deadlines</h2>
-  <table class="small">
-    <tr class="hl"><td>Today, Sat 21 Nov, 23:59 Cairo</td><td><strong>Working implementation / prototype checkpoint</strong> — tag <code>checkpoint-prototype</code>; repo URL + commit hash on Classroom; <code>CHECKPOINT.md</code></td></tr>
-    <tr><td>Sat 5 Dec, 23:59 Cairo</td><td>Testing + benchmarking checkpoint</td></tr>
-    <tr><td>Sat 12 Dec, 23:59 Cairo</td><td>Individual Engineering Analysis Assignment</td></tr>
-    <tr><td>Sat 19 Dec, 09:00 Cairo</td><td>Final repository freeze; defense session 1</td></tr>
-  </table>
-  <aside class="notes"><p><span class="t">02:55</span> Remind students of the deadlines (23:59 Cairo; repository freeze 09:00 Cairo, 19 Dec).</p></aside>
-</section>
+<h2>Deadlines</h2>
+<table class="small">
+<tr class="hl"><td>Today, Sat 21 Nov, 23:59 Cairo</td><td><strong>Working implementation / prototype checkpoint</strong> — tag <code>checkpoint-prototype</code>; repo URL + commit hash on Classroom; <code>CHECKPOINT.md</code></td></tr>
+<tr><td>Sat 5 Dec, 23:59 Cairo</td><td>Testing + benchmarking checkpoint</td></tr>
+<tr><td>Sat 12 Dec, 23:59 Cairo</td><td>Individual Engineering Analysis Assignment</td></tr>
+<tr><td>Sat 19 Dec, 09:00 Cairo</td><td>Final repository freeze; defense session 1</td></tr>
+</table>
 
+</section>
 <section class="slide">
-  <h2>Summary</h2>
-  <ol>
-    <li>Versioning is a workload decision: how many versions, how big the changes, which versions are read, how long they live.</li>
-    <li>Full copies, deltas and structural sharing sit on a write/read/memory trade-off curve.</li>
-    <li>Structural sharing is only correct if published nodes are never mutated.</li>
-    <li>Immutability moves the lifetime problem from "who writes" to "who still reads".</li>
-    <li>Every immutable system needs reclamation and compaction — and a retention policy.</li>
-    <li>Test history by checking every version <em>after</em> building the whole history.</li>
-  </ol>
-  <p class="small muted">Next: Lecture 10 · Sat 28 Nov — Probabilistic Data Structures.</p>
-  <aside class="notes"><p>Exit question: "Which state in your project would benefit from being immutable, and what would that cost?"</p></aside>
-</section>
+<h2>Summary</h2>
+<ol>
+<li>Versioning is a workload decision: how many versions, how big the changes, which versions are read, how long they live.</li>
+<li>Full copies, deltas and structural sharing sit on a write/read/memory trade-off curve.</li>
+<li>Structural sharing is only correct if published nodes are never mutated.</li>
+<li>Immutability moves the lifetime problem from "who writes" to "who still reads".</li>
+<li>Every immutable system needs reclamation and compaction — and a retention policy.</li>
+<li>Test history by checking every version <em>after</em> building the whole history.</li>
+</ol>
+<p class="small muted">Next: Lecture 10 · Sat 28 Nov — Probabilistic Data Structures.</p>
 
+</section>
 <script src="../common/slides.js"></script>
 </body>
 </html>

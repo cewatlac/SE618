@@ -1,221 +1,149 @@
+<!doctype html>
 <!DOCTYPE html>
+
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1" name="viewport"/>
 <title>SE618 L4 — Tries and Autocomplete</title>
-<link rel="stylesheet" href="../common/styles.css">
-<link rel="stylesheet" href="../common/print.css">
-</head>
-<body data-course="SE618" data-lecture="Lecture 4 · Sat 17 Oct 2026">
-
+<link href="../common/styles.css" rel="stylesheet"/>
+<link href="../common/print.css" rel="stylesheet"/>
+<meta content="SE618 Lecture 4: Tries and Autocomplete Systems. Student-facing interactive slides." name="description"/></head>
+<body data-course="SE618" data-lecture="Lecture 4 · Sat 17 Oct 2026" data-public="true">
 <section class="slide title">
-  <span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
-  <h1>Lecture 4<br>Tries and Autocomplete Systems</h1>
-  <p>Attractive complexity is not a design decision. Memory, locality, updates and workload are.</p>
-  <div class="meta">Saturday 17 October 2026 · 3 hours<br><strong style="color:#fff">Project proposal due today, 23:59 Cairo</strong></div>
-  <aside class="notes">
-    <h4>Plan (3h)</h4>
-    <table><tr><td>00:00–00:20</td><td>Part 1 — Requirements of a real autocomplete box</td></tr>
-    <tr><td>00:20–01:00</td><td>Part 2 — Trie design: children, terminal state, ranking, deletion, invariants</td></tr>
-    <tr><td>01:00–01:30</td><td>Part 3 — Normalisation, Unicode, memory amplification, alternatives</td></tr>
-    <tr><td>01:30–01:40</td><td>Break</td></tr>
-    <tr><td>01:40–02:20</td><td>Part 4 — Exercise: compare autocomplete architectures, then measure</td></tr>
-    <tr><td>02:20–02:35</td><td>Part 5 — Interpreting results; tests and benchmarks for autocomplete</td></tr>
-    <tr><td>02:35–03:00</td><td>Part 6 — Proposal clinic: what a good proposal contains (due tonight)</td></tr></table>
-    <h4>Prepare</h4>
-    <p><code>Student_Resources/autocomplete_bench.cpp</code>: three designs (sorted array, pointer trie + DFS, trie with cached top-k), counting allocator for memory, differential check. Default 200k terms takes ~20 s; <code>./ac 50000</code> takes ~5 s. Compile before class.</p>
-    <p>Part 6 is non-negotiable today: the proposal is due tonight.</p>
-  </aside>
-</section>
+<span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
+<h1>Lecture 4<br/>Tries and Autocomplete Systems</h1>
+<p>Attractive complexity is not a design decision. Memory, locality, updates and workload are.</p>
+<div class="meta">Saturday 17 October 2026 · 3 hours<br/><strong style="color:#fff">Project proposal due today, 23:59 Cairo</strong></div>
 
+</section>
 <section class="slide">
-  <h2>Where we are</h2>
-  <div class="cols">
-    <div class="small">
-      <ul>
-        <li>L1: requirements → contract → evidence</li>
-        <li>L2: O(1) depends on keys, load, layout, adversaries</li>
-        <li>L3: no universally best policy; workload decides</li>
-      </ul>
-      <p>Today: a structure famous for its complexity — lookup in O(length of the prefix), independent of vocabulary size. Is that what the product needs?</p>
-    </div>
-    <div class="box key">
-      <span class="label">Today's distinctive lesson</span>
+<h2>Where we are</h2>
+<div class="cols">
+<div class="small">
+<ul>
+<li>L1: requirements → contract → evidence</li>
+<li>L2: O(1) depends on keys, load, layout, adversaries</li>
+<li>L3: no universally best policy; workload decides</li>
+</ul>
+<p>Today: a structure famous for its complexity — lookup in O(length of the prefix), independent of vocabulary size. Is that what the product needs?</p>
+</div>
+<div class="box key">
+<span class="label">Today's distinctive lesson</span>
       A structure with attractive theoretical complexity can still be the <strong>wrong production choice</strong> because of memory, locality, update cost, implementation complexity — or because the expensive part of the query is somewhere else.
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:00</span> 2 minutes. Quick recall: "Which cache policy won on the 'shifting' workload last week, and why did LFU lose?" (SLRU/LRU; stale frequencies.)</p>
-    <p>Remind: proposal due tonight 23:59 Cairo; the last 25 minutes are a proposal clinic.</p>
-  </aside>
+</div>
+
 </section>
 
-<!-- ====================== PART 1 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 1 · 00:00–00:20</span>
-  <h1>What does an autocomplete box<br>actually require?</h1>
+<span class="kicker">Part 1 · 00:00–00:20</span>
+<h1>What does an autocomplete box<br/>actually require?</h1>
 </section>
-
 <section class="slide">
-  <h2>The scenario</h2>
-  <div class="cols wide-l small">
-    <div>
-      <p>An Egyptian e-commerce site wants suggestions in its search box.</p>
-      <ul>
-        <li><strong>2 million</strong> suggestion strings (product names + popular past queries), Arabic and English</li>
-        <li>Peak <strong>20,000</strong> prefix queries/s (a query per keystroke)</li>
-        <li>End-to-end p99 ≤ 50 ms; the suggestion lookup gets <strong>≤ 2 ms p99</strong></li>
-        <li><strong>300 MB</strong> per instance for the index</li>
-        <li>Top <strong>10</strong> suggestions ranked by popularity; popularity recomputed daily; new products every hour</li>
-      </ul>
-    </div>
-    <div class="box q"><span class="label">Pairs · 4 min</span>
+<h2>The scenario</h2>
+<div class="cols wide-l small">
+<div>
+<p>An Egyptian e-commerce site wants suggestions in its search box.</p>
+<ul>
+<li><strong>2 million</strong> suggestion strings (product names + popular past queries), Arabic and English</li>
+<li>Peak <strong>20,000</strong> prefix queries/s (a query per keystroke)</li>
+<li>End-to-end p99 ≤ 50 ms; the suggestion lookup gets <strong>≤ 2 ms p99</strong></li>
+<li><strong>300 MB</strong> per instance for the index</li>
+<li>Top <strong>10</strong> suggestions ranked by popularity; popularity recomputed daily; new products every hour</li>
+</ul>
+</div>
+<div class="box q"><span class="label">Pairs · 4 min</span>
       List every question you must answer before choosing a structure. Aim for eight.</div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:03</span></p>
-    <h4>Expected questions (collect, then show the next slide)</h4>
-    <ul>
-      <li>What is a match: prefix of the whole string, or prefix of <em>any word</em> ("case" → "iPhone 15 case")?</li>
-      <li>Case, diacritics, Arabic letter variants, Arabic-Indic digits — equal or not?</li>
-      <li>How is ranking defined; are ties deterministic?</li>
-      <li>How often do scores change; must changes be visible immediately?</li>
-      <li>Distribution of prefix lengths actually typed (mostly 1–4 characters!)</li>
-      <li>What happens for the empty prefix? For a prefix with no matches?</li>
-      <li>Typo tolerance ("iphnoe")? Personalisation? — scope decisions.</li>
-      <li>Memory per instance; number of replicas; rebuild time on deploy.</li>
-    </ul>
-  </aside>
-</section>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Requirements that change the structure</h2>
-  <table class="small">
-    <tr><th>Question</th><th>If the answer is…</th><th>…then the structure must</th></tr>
-    <tr><td>Match what?</td><td>Prefix of any word</td><td>Index every word suffix position, not just strings</td></tr>
-    <tr><td>Equality?</td><td>Case/diacritic-insensitive, Arabic variants folded</td><td>Index <em>normalised</em> keys, keep display strings separately</td></tr>
-    <tr><td>Ranking?</td><td>Top 10 by popularity</td><td>Avoid enumerating all matches for short prefixes</td></tr>
-    <tr><td>Prefix lengths?</td><td>Mostly 1–3 characters</td><td>Be fastest where the result set is <strong>largest</strong></td></tr>
-    <tr><td>Updates?</td><td>Hourly inserts, daily re-score</td><td>Rebuild offline + swap, or support in-place update</td></tr>
-    <tr><td>Memory?</td><td>300 MB, 2M strings</td><td>≤ 150 bytes per suggestion, <em>including</em> the text</td></tr>
-  </table>
-  <aside class="notes">
-    <p><span class="t">00:10</span></p>
-    <h4>The key insight to build toward</h4>
-    <p>The textbook trie argument is: "lookup costs O(|prefix|), independent of n". But for autocomplete, <strong>finding the prefix node is the cheap part</strong>. The expensive part is <em>ranking</em>: the prefix "s" may match 150,000 strings, and we need the 10 most popular. A plain trie must visit the whole subtree — O(size of subtree), not O(|prefix|). Short prefixes are the most common queries and have the largest subtrees.</p>
-    <h4>Memory budget arithmetic</h4>
-    <p>300 MB / 2M = 150 B per suggestion. The strings themselves (avg ~25 bytes UTF-8, Arabic letters are 2 bytes each) plus a score already use ~30–60 B. That leaves ~100 B for the index. Keep this number; we will measure the trie against it.</p>
-    <h4>Rebuild-and-swap</h4>
-    <p>With daily scores and hourly inserts, a very common production pattern is: build an immutable index offline, ship it, atomically swap a pointer. Then the structure does not need in-place updates at all — which changes which structures are acceptable (compressed, static ones become attractive).</p>
-  </aside>
+<h2>Requirements that change the structure</h2>
+<table class="small">
+<tr><th>Question</th><th>If the answer is…</th><th>…then the structure must</th></tr>
+<tr><td>Match what?</td><td>Prefix of any word</td><td>Index every word suffix position, not just strings</td></tr>
+<tr><td>Equality?</td><td>Case/diacritic-insensitive, Arabic variants folded</td><td>Index <em>normalised</em> keys, keep display strings separately</td></tr>
+<tr><td>Ranking?</td><td>Top 10 by popularity</td><td>Avoid enumerating all matches for short prefixes</td></tr>
+<tr><td>Prefix lengths?</td><td>Mostly 1–3 characters</td><td>Be fastest where the result set is <strong>largest</strong></td></tr>
+<tr><td>Updates?</td><td>Hourly inserts, daily re-score</td><td>Rebuild offline + swap, or support in-place update</td></tr>
+<tr><td>Memory?</td><td>300 MB, 2M strings</td><td>≤ 150 bytes per suggestion, <em>including</em> the text</td></tr>
+</table>
+
 </section>
 
-<!-- ====================== PART 2 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 2 · 00:20–01:00</span>
-  <h1>Trie design: children, terminals,<br>ranking, deletion, invariants</h1>
+<span class="kicker">Part 2 · 00:20–01:00</span>
+<h1>Trie design: children, terminals,<br/>ranking, deletion, invariants</h1>
 </section>
-
 <section class="slide">
-  <h2>The structure, and why it needs a terminal flag</h2>
-  <div class="cols wide-r">
-    <div class="small">
-      <p>Terms: <code>car</code>, <code>card</code>, <code>care</code>, <code>cat</code>, <code>do</code></p>
-      <ul>
-        <li>Each edge = one symbol (byte? code point?)</li>
-        <li>A node = the set of terms sharing a prefix</li>
-        <li><strong>Terminal</strong> (●): a term ends here. <code>car</code> is a term <em>and</em> a prefix of <code>card</code> — structure alone cannot tell</li>
-        <li>Payload on terminal: term id, score, display string</li>
-      </ul>
-    </div>
-    <svg viewBox="0 0 560 330">
-      <g stroke="#14304a" stroke-width="1.6">
-        <line x1="280" y1="36" x2="190" y2="96"/><line x1="280" y1="36" x2="420" y2="96"/>
-        <line x1="190" y1="96" x2="190" y2="160"/><line x1="190" y1="160" x2="120" y2="226"/><line x1="190" y1="160" x2="260" y2="226"/>
-        <line x1="120" y1="226" x2="70" y2="292"/><line x1="120" y1="226" x2="170" y2="292"/><line x1="420" y1="96" x2="420" y2="160"/>
-      </g>
-      <g font-size="16" fill="#0b6e75" font-family="Consolas,monospace">
-        <text x="220" y="62">c</text><text x="355" y="62">d</text><text x="197" y="132">a</text><text x="140" y="192">r</text><text x="232" y="192">t</text>
-        <text x="80" y="262">d</text><text x="152" y="262">e</text><text x="427" y="132">o</text>
-      </g>
-      <g><circle cx="280" cy="30" r="13" fill="#fff" stroke="#14304a" stroke-width="2"/>
-        <circle cx="190" cy="96" r="13" fill="#fff" stroke="#14304a" stroke-width="2"/><circle cx="420" cy="96" r="13" fill="#fff" stroke="#14304a" stroke-width="2"/>
-        <circle cx="190" cy="160" r="13" fill="#fff" stroke="#14304a" stroke-width="2"/>
-        <circle cx="120" cy="226" r="13" fill="#0b6e75"/><circle cx="260" cy="226" r="13" fill="#0b6e75"/>
-        <circle cx="70" cy="292" r="13" fill="#0b6e75"/><circle cx="170" cy="292" r="13" fill="#0b6e75"/><circle cx="420" cy="160" r="13" fill="#0b6e75"/></g>
-      <g font-size="15" fill="#46505e"><text x="138" y="232">car</text><text x="278" y="232">cat</text><text x="40" y="322">card</text><text x="160" y="322">care</text><text x="438" y="166">do</text></g>
-    </svg>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:20</span></p>
-    <h4>Say</h4>
-    <p>"You know this. Three questions we will spend the next 40 minutes on: how are children stored, how do we rank, and how do we delete — and each has a memory or complexity surprise."</p>
-    <h4>Terminal-state bug</h4>
-    <p>A classic implementation bug: using "node has no children" to mean "is a word". Then <code>car</code> is not found once <code>card</code> is inserted. Another: deleting <code>card</code> by removing the node chain up to the root — which deletes <code>car</code> too. Both violate the invariant "the set of terminal nodes = the set of terms".</p>
-    <h4>Symbol choice (preview of Part 3)</h4>
-    <p>Edges labelled by bytes (UTF-8) give ≤ 256 children and deep paths for Arabic (2 bytes per letter). Edges labelled by code points give fewer levels but a huge alphabet (≈150k). Neither is "correct"; it is an engineering choice with memory consequences.</p>
-  </aside>
+<h2>The structure, and why it needs a terminal flag</h2>
+<div class="cols wide-r">
+<div class="small">
+<p>Terms: <code>car</code>, <code>card</code>, <code>care</code>, <code>cat</code>, <code>do</code></p>
+<ul>
+<li>Each edge = one symbol (byte? code point?)</li>
+<li>A node = the set of terms sharing a prefix</li>
+<li><strong>Terminal</strong> (●): a term ends here. <code>car</code> is a term <em>and</em> a prefix of <code>card</code> — structure alone cannot tell</li>
+<li>Payload on terminal: term id, score, display string</li>
+</ul>
+</div>
+<svg viewbox="0 0 560 330">
+<g stroke="#14304a" stroke-width="1.6">
+<line x1="280" x2="190" y1="36" y2="96"></line><line x1="280" x2="420" y1="36" y2="96"></line>
+<line x1="190" x2="190" y1="96" y2="160"></line><line x1="190" x2="120" y1="160" y2="226"></line><line x1="190" x2="260" y1="160" y2="226"></line>
+<line x1="120" x2="70" y1="226" y2="292"></line><line x1="120" x2="170" y1="226" y2="292"></line><line x1="420" x2="420" y1="96" y2="160"></line>
+</g>
+<g fill="#0b6e75" font-family="Consolas,monospace" font-size="16">
+<text x="220" y="62">c</text><text x="355" y="62">d</text><text x="197" y="132">a</text><text x="140" y="192">r</text><text x="232" y="192">t</text>
+<text x="80" y="262">d</text><text x="152" y="262">e</text><text x="427" y="132">o</text>
+</g>
+<g><circle cx="280" cy="30" fill="#fff" r="13" stroke="#14304a" stroke-width="2"></circle>
+<circle cx="190" cy="96" fill="#fff" r="13" stroke="#14304a" stroke-width="2"></circle><circle cx="420" cy="96" fill="#fff" r="13" stroke="#14304a" stroke-width="2"></circle>
+<circle cx="190" cy="160" fill="#fff" r="13" stroke="#14304a" stroke-width="2"></circle>
+<circle cx="120" cy="226" fill="#0b6e75" r="13"></circle><circle cx="260" cy="226" fill="#0b6e75" r="13"></circle>
+<circle cx="70" cy="292" fill="#0b6e75" r="13"></circle><circle cx="170" cy="292" fill="#0b6e75" r="13"></circle><circle cx="420" cy="160" fill="#0b6e75" r="13"></circle></g>
+<g fill="#46505e" font-size="15"><text x="138" y="232">car</text><text x="278" y="232">cat</text><text x="40" y="322">card</text><text x="160" y="322">care</text><text x="438" y="166">do</text></g>
+</svg>
+</div>
+
 </section>
-
 <section class="slide">
-  <h2>Child representation: the real design decision</h2>
-  <table class="small">
-    <tr><th>Children stored as</th><th>Lookup per symbol</th><th>Memory per node</th><th>Notes</th></tr>
-    <tr><td>Fixed array [256] of pointers</td><td>1 load</td><td><strong>2 KB</strong> (mostly null)</td><td>Fast, absurd memory</td></tr>
-    <tr><td>Fixed array [26]</td><td>1 load</td><td>208 B</td><td>Only for a–z: no Arabic, no digits</td></tr>
-    <tr><td>Sorted vector (symbol, ptr)</td><td>scan / binary search</td><td>~24 B + 9 B/child</td><td>Compact; slow insert</td></tr>
-    <tr><td><code>std::map&lt;char, ptr&gt;</code></td><td>tree walk</td><td>48 B + ~48 B/child</td><td>Ordered; many allocations</td></tr>
-    <tr><td><code>unordered_map&lt;char, ptr&gt;</code></td><td>hash</td><td>~56 B + ~32 B/child</td><td>Unordered: DFS order varies</td></tr>
-    <tr><td>Bitmap + packed child array</td><td>popcount</td><td>32 B + 4 B/child</td><td>Compact, static-friendly</td></tr>
-  </table>
-  <p class="small" style="margin-top:12px">Most nodes deep in a trie have <strong>one</strong> child. The representation is paid for millions of times.</p>
-  <aside class="notes">
-    <p><span class="t">00:27</span></p>
-    <h4>Numbers (64-bit, libstdc++, approximate)</h4>
-    <ul>
-      <li><code>std::map</code> header ~48 B; each entry is a red-black tree node: 3 pointers + colour + key + value ≈ 48 B + allocator header.</li>
-      <li>Node count: for 2M strings of average length ~20 symbols, a trie has on the order of 10–25M nodes (shared prefixes reduce it). At ~100 B per node that is 1–2.5 GB — far beyond 300 MB.</li>
-      <li>Bitmap + popcount (the "HAMT"/"array-mapped" trick): a 256-bit bitmap says which symbols have children; child index = popcount of bits below the symbol. Used in hash array mapped tries and in some static tries.</li>
-    </ul>
-    <h4>Ask</h4>
-    <p>"Our benchmark uses <code>std::map</code>. Predict the bytes per term for 200k terms." Let them guess; the measured answer is ~290 B/term <em>on top of</em> the strings themselves (~47 B/term). Reveal in Part 4.</p>
-    <h4>Pointer-heavy consequence</h4>
-    <p>Every step down the trie is a dependent load from a different heap location — a likely cache miss (~80–100 ns) once the trie exceeds the cache. A 10-character prefix = 10 dependent misses ≈ 1 µs before any ranking work. A binary search over a sorted array of 2M strings is ~21 comparisons, also with misses — the asymptotic advantage is much smaller than it looks.</p>
-  </aside>
+<h2>Child representation: the real design decision</h2>
+<table class="small">
+<tr><th>Children stored as</th><th>Lookup per symbol</th><th>Memory per node</th><th>Notes</th></tr>
+<tr><td>Fixed array [256] of pointers</td><td>1 load</td><td><strong>2 KB</strong> (mostly null)</td><td>Fast, absurd memory</td></tr>
+<tr><td>Fixed array [26]</td><td>1 load</td><td>208 B</td><td>Only for a–z: no Arabic, no digits</td></tr>
+<tr><td>Sorted vector (symbol, ptr)</td><td>scan / binary search</td><td>~24 B + 9 B/child</td><td>Compact; slow insert</td></tr>
+<tr><td><code>std::map&lt;char, ptr&gt;</code></td><td>tree walk</td><td>48 B + ~48 B/child</td><td>Ordered; many allocations</td></tr>
+<tr><td><code>unordered_map&lt;char, ptr&gt;</code></td><td>hash</td><td>~56 B + ~32 B/child</td><td>Unordered: DFS order varies</td></tr>
+<tr><td>Bitmap + packed child array</td><td>popcount</td><td>32 B + 4 B/child</td><td>Compact, static-friendly</td></tr>
+</table>
+<p class="small" style="margin-top:12px">Most nodes deep in a trie have <strong>one</strong> child. The representation is paid for millions of times.</p>
+
 </section>
-
 <section class="slide">
-  <h2>Ranking: where the cost actually is</h2>
-  <div class="cols small">
-    <div class="card">
-      <h3>A. Walk + enumerate subtree</h3>
-      <p>Find the prefix node, DFS its subtree, keep a size-k heap.</p>
-      <p>Cost: O(|p| + <strong>subtree size</strong> · log k). For "s", the subtree may hold 7% of all terms.</p>
-      <p><span class="tag bad">slowest exactly on the most common queries</span></p>
-    </div>
-    <div class="card">
-      <h3>B. Cache top-k in every node</h3>
-      <p>Each node stores the ids of the k best terms beneath it.</p>
-      <p>Query: O(|p| + k). Memory: + up to k ids per node. Score update: fix every ancestor, O(|term| · k).</p>
-      <p><span class="tag warn">fast reads, costly memory and updates</span></p>
-    </div>
-  </div>
-  <div class="box q small" style="margin-top:16px"><span class="label">Ask</span>With the sorted-array design, is the problem any different? What would "caching top-k" mean there?</div>
-  <aside class="notes">
-    <p><span class="t">00:35</span></p>
-    <h4>Answer to the question</h4>
-    <p>Same problem: the matches of a prefix form a <strong>contiguous range</strong> in a sorted array (a nice property!), but finding the top 10 in a range of 150,000 still means scanning it — unless we add a structure for "top-k in a range" (a range-maximum structure; Week 6 topic!) or precompute top-k for short prefixes only (a hash map from prefix → top-k for |p| ≤ 3; longer prefixes have small ranges and are cheap to scan). That hybrid is often the best practical design. It appears in the exercise.</p>
-    <h4>Point</h4>
-    <p>The data-structure question for autocomplete is not "trie vs array" but "how do we answer top-k over the set of prefix matches under our prefix-length distribution".</p>
-    <h4>Update cost of cached top-k</h4>
-    <p>A score change for one term must update the lists of all its ancestors (|term| nodes). If the term drops out of a node's top-k, the node needs the next best candidate — which requires information not in the cache (recompute from children). This is why many systems rebuild offline and swap.</p>
-  </aside>
+<h2>Ranking: where the cost actually is</h2>
+<div class="cols small">
+<div class="card">
+<h3>A. Walk + enumerate subtree</h3>
+<p>Find the prefix node, DFS its subtree, keep a size-k heap.</p>
+<p>Cost: O(|p| + <strong>subtree size</strong> · log k). For "s", the subtree may hold 7% of all terms.</p>
+<p><span class="tag bad">slowest exactly on the most common queries</span></p>
+</div>
+<div class="card">
+<h3>B. Cache top-k in every node</h3>
+<p>Each node stores the ids of the k best terms beneath it.</p>
+<p>Query: O(|p| + k). Memory: + up to k ids per node. Score update: fix every ancestor, O(|term| · k).</p>
+<p><span class="tag warn">fast reads, costly memory and updates</span></p>
+</div>
+</div>
+<div class="box q small" style="margin-top:16px"><span class="label">Ask</span>With the sorted-array design, is the problem any different? What would "caching top-k" mean there?</div>
+
 </section>
-
 <section class="slide">
-  <h2>Deletion: unmark, then prune — carefully</h2>
-  <pre class="sm"><code>bool erase(std::string_view w) {                 // false if w was not a term
+<h2>Deletion: unmark, then prune — carefully</h2>
+<pre class="sm"><code>bool erase(std::string_view w) {                 // false if w was not a term
     std::vector&lt;std::pair&lt;Node*, char&gt;&gt; path;
     Node* n = &amp;root_;
     for (char c : w) {
@@ -234,26 +162,12 @@
     }
     return true;                                 // cached top-k lists on path now stale!
 }</code></pre>
-  <aside class="notes">
-    <p><span class="t">00:42</span></p>
-    <h4>Walk through</h4>
-    <ul>
-      <li>Return <code>false</code> for "not a term" — including when <code>w</code> is only a prefix of other terms. Deleting a non-term is a normal outcome (Lecture 1).</li>
-      <li>Pruning stops at the first node that is terminal or still has children — so deleting <code>card</code> removes only the <code>d</code> node, and <code>car</code> survives.</li>
-      <li>Iterative with an explicit path: recursion depth = term length; fine here, but explicit paths avoid stack issues for pathological long keys (a URL of 8 KB).</li>
-      <li>Last comment: with cached top-k, <em>every</em> ancestor list may still contain the deleted term. Deletion is where the caching design pays — correctness now needs recomputation up the path.</li>
-    </ul>
-    <h4>Lazy alternative</h4>
-    <p>Mark deleted (tombstone!) and filter at query time; purge on rebuild. Same idea as Lecture 2. Consequence: a top-10 list may now contain deleted entries, so store top-(k + slack) or fall back to DFS when too many are filtered.</p>
-    <h4>Business angle</h4>
-    <p>Deletion is often a <strong>compliance</strong> requirement (remove an offensive or legally problematic suggestion <em>now</em>). "Rebuild tonight" may be unacceptable for that path → a small blocklist checked at query time is the usual answer.</p>
-  </aside>
-</section>
 
+</section>
 <section class="slide">
-  <h2>API and invariants</h2>
-  <div class="cols small">
-    <pre class="sm"><code>struct Suggestion { std::string display;
+<h2>API and invariants</h2>
+<div class="cols small">
+<pre class="sm"><code>struct Suggestion { std::string display;
                     std::uint32_t score; };
 
 class Autocomplete {
@@ -267,396 +181,267 @@ public:
               std::size_t k) const;
     std::size_t size() const noexcept;
 };</code></pre>
-    <div class="box key">
-      <span class="label">Invariants</span>
-      <ol class="xsmall">
-        <li>Terminal nodes ↔ terms, one-to-one; <code>size()</code> = #terminals</li>
-        <li>No dead branches: every leaf is terminal</li>
-        <li>Children of a node have distinct symbols</li>
-        <li>Cached list at node = top-k of its subtree (same order as contract)</li>
-        <li>Indexed keys are normalised by <em>the same</em> function used for queries</li>
-      </ol>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:50</span></p>
-    <h4>API decisions to highlight</h4>
-    <ul>
-      <li>Immutable, built in one shot (<code>build</code>) — matches rebuild-and-swap; allows compact static layouts. Thread-safe for concurrent reads by construction.</li>
-      <li>The API takes the <strong>raw</strong> prefix and normalises internally. If callers had to normalise, some would forget → invariant 5 broken from outside.</li>
-      <li>Deterministic tie-break is in the contract: tests and caches (and users!) see stable results.</li>
-      <li>Cap on k: protects the service from <code>k = 1e6</code> requests (resource exhaustion).</li>
-      <li>Returns display strings by value: no lifetime coupling with the index (which may be swapped out).</li>
-    </ul>
-    <h4>Invariant 5 is Lecture 2's rule 1 again</h4>
-    <p>Equal-under-normalisation must mean identical keys. Index with one normaliser and query with another → misses that look like data bugs.</p>
-  </aside>
+<div class="box key">
+<span class="label">Invariants</span>
+<ol class="xsmall">
+<li>Terminal nodes ↔ terms, one-to-one; <code>size()</code> = #terminals</li>
+<li>No dead branches: every leaf is terminal</li>
+<li>Children of a node have distinct symbols</li>
+<li>Cached list at node = top-k of its subtree (same order as contract)</li>
+<li>Indexed keys are normalised by <em>the same</em> function used for queries</li>
+</ol>
+</div>
+</div>
+
 </section>
 
-<!-- ====================== PART 3 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 3 · 01:00–01:30</span>
-  <h1>Normalisation, Unicode,<br>memory and alternatives</h1>
+<span class="kicker">Part 3 · 01:00–01:30</span>
+<h1>Normalisation, Unicode,<br/>memory and alternatives</h1>
 </section>
-
 <section class="slide">
-  <h2>What is a "character"?</h2>
-  <table class="small">
-    <tr><th>Layer</th><th>Example</th><th>Trie edge per…</th></tr>
-    <tr><td>Bytes (UTF-8)</td><td><code>é</code> = C3 A9; <code>م</code> = D9 85</td><td>byte: ≤ 256 children, 2× depth for Arabic</td></tr>
-    <tr><td>Code points</td><td><code>é</code> = U+00E9 <em>or</em> <code>e</code> + U+0301</td><td>code point: huge alphabet</td></tr>
-    <tr><td>Grapheme clusters</td><td>👍🏽 = 2 code points, 8 bytes</td><td>what users think a character is</td></tr>
-  </table>
-  <div class="box warn small" style="margin-top:14px">
+<h2>What is a "character"?</h2>
+<table class="small">
+<tr><th>Layer</th><th>Example</th><th>Trie edge per…</th></tr>
+<tr><td>Bytes (UTF-8)</td><td><code>é</code> = C3 A9; <code>م</code> = D9 85</td><td>byte: ≤ 256 children, 2× depth for Arabic</td></tr>
+<tr><td>Code points</td><td><code>é</code> = U+00E9 <em>or</em> <code>e</code> + U+0301</td><td>code point: huge alphabet</td></tr>
+<tr><td>Grapheme clusters</td><td>👍🏽 = 2 code points, 8 bytes</td><td>what users think a character is</td></tr>
+</table>
+<div class="box warn small" style="margin-top:14px">
     Two visually identical strings can have different code points: <code>"café"</code> as NFC (4 code points) vs NFD (5). Without normalisation, a prefix query for one misses the other.
   </div>
-  <aside class="notes">
-    <p><span class="t">01:00</span></p>
-    <h4>Key facts</h4>
-    <ul>
-      <li>UTF-8 is prefix-safe: if string A is a prefix of B at the code-point level, their UTF-8 encodings are byte-prefixes. So a byte-trie over normalised UTF-8 answers code-point prefix queries correctly — as long as the query does not end mid-code-point (it won't, if the client sends valid UTF-8).</li>
-      <li>Unicode normalisation forms: NFC (composed), NFD (decomposed), NFKC/NFKD (compatibility: e.g. "ﬁ" ligature → "fi", full-width digits → ASCII). For search keys, NFKC + case folding is a common base.</li>
-      <li>C++ has no standard Unicode normalisation. Use ICU (<code>icu::Normalizer2</code>) or a vetted library; do not hand-roll. For the course project, restrict and document the supported character set if needed — that is an acceptable engineering scope decision if stated.</li>
-      <li>Case folding is locale-dependent: Turkish dotted/dotless i (İ/i, I/ı). "Lowercase" is not a universal function.</li>
-    </ul>
-  </aside>
-</section>
 
-<section class="slide">
-  <h2>Normalising Arabic search keys</h2>
-  <table class="small">
-    <tr><th>Variation users type</th><th>Typical folding for search</th></tr>
-    <tr><td>Alef forms: <bdi>أ</bdi> <bdi>إ</bdi> <bdi>آ</bdi> <bdi>ٱ</bdi></td><td>→ <bdi>ا</bdi></td></tr>
-    <tr><td>Taa marbuta / haa at word end: <bdi>ة</bdi> / <bdi>ه</bdi></td><td>→ <bdi>ه</bdi> (or keep; product decision)</td></tr>
-    <tr><td>Alef maqsura / yaa: <bdi>ى</bdi> / <bdi>ي</bdi></td><td>→ <bdi>ي</bdi></td></tr>
-    <tr><td>Diacritics (tashkeel): <bdi>بَ بُ بِ بّ بْ</bdi></td><td>remove</td></tr>
-    <tr><td>Tatweel (e.g. <bdi>كـــتاب</bdi>)</td><td>remove</td></tr>
-    <tr><td>Arabic-Indic digits: <bdi>٠١٢٣</bdi></td><td>→ 0123</td></tr>
-  </table>
-  <div class="box key small" style="margin-top:12px">Normalisation is a <strong>product decision encoded as a function</strong>. Index the folded key; display the original string. Test the function like any other contract.</div>
-  <aside class="notes">
-    <p><span class="t">01:07</span></p>
-    <h4>Say</h4>
-    <p>"For an Egyptian e-commerce site, a user typing <code>اسكندريه</code> must find <code>الإسكندرية</code>-related products. That match depends entirely on folding rules decided by the product team, not on the trie."</p>
-    <h4>Discussion points</h4>
-    <ul>
-      <li>Folding increases recall and can reduce precision (two different words become equal). Taa marbuta folding is the most debated; decide with product/linguistic input.</li>
-      <li>Mixed-language strings ("iPhone ١٥ برو") need both Arabic folding and Latin case folding, and digit folding.</li>
-      <li>Word-prefix matching in Arabic interacts with attached prefixes (ال، و، ب): "the" is attached to the word. Matching <code>كتاب</code> inside <code>والكتاب</code> is a tokenisation decision — out of scope for today, but a good project extension.</li>
-      <li>Where to fold: in one function used by both the index builder and the query path; version it — changing it requires a rebuild.</li>
-    </ul>
-    <h4>Test cases to write</h4>
-    <p>Idempotence (fold(fold(x)) = fold(x)); pairs that must fold equal; pairs that must stay different; display text unchanged; mixed scripts; empty string after folding (input of only diacritics).</p>
-  </aside>
 </section>
-
 <section class="slide">
-  <h2>Memory amplification: where the bytes go</h2>
-  <div class="cols small">
-    <div>
-      <p>Measured, 200,000 short synthetic terms (2–5 syllables):</p>
-      <table class="tight">
-        <tr><th>Component</th><th class="num">MB</th><th class="num">B/term</th></tr>
-        <tr><td>The strings themselves (<code>std::string</code>)</td><td class="num">9.4</td><td class="num">47</td></tr>
-        <tr><td>Sorted array index (reuses strings)</td><td class="num">0</td><td class="num">0</td></tr>
-        <tr><td>Pointer trie, <code>std::map</code> children</td><td class="num">58.2</td><td class="num">291</td></tr>
-        <tr><td>Same trie + cached top-10</td><td class="num">70.9</td><td class="num">354</td></tr>
-      </table>
-      <p class="xsmall muted">Live heap bytes via a counting <code>operator new</code>; allocator headers excluded — real RSS is higher.</p>
-    </div>
-    <div class="box warn">
-      <span class="label">Why so much?</span>
-      <ul class="xsmall">
-        <li>~1 node per character not shared with another term</li>
-        <li>Each node: map header + child entry node + terminal fields</li>
-        <li>Each child entry is its own heap allocation</li>
-      </ul>
+<h2>Normalising Arabic search keys</h2>
+<table class="small">
+<tr><th>Variation users type</th><th>Typical folding for search</th></tr>
+<tr><td>Alef forms: <bdi>أ</bdi> <bdi>إ</bdi> <bdi>آ</bdi> <bdi>ٱ</bdi></td><td>→ <bdi>ا</bdi></td></tr>
+<tr><td>Taa marbuta / haa at word end: <bdi>ة</bdi> / <bdi>ه</bdi></td><td>→ <bdi>ه</bdi> (or keep; product decision)</td></tr>
+<tr><td>Alef maqsura / yaa: <bdi>ى</bdi> / <bdi>ي</bdi></td><td>→ <bdi>ي</bdi></td></tr>
+<tr><td>Diacritics (tashkeel): <bdi>بَ بُ بِ بّ بْ</bdi></td><td>remove</td></tr>
+<tr><td>Tatweel (e.g. <bdi>كـــتاب</bdi>)</td><td>remove</td></tr>
+<tr><td>Arabic-Indic digits: <bdi>٠١٢٣</bdi></td><td>→ 0123</td></tr>
+</table>
+<div class="box key small" style="margin-top:12px">Normalisation is a <strong>product decision encoded as a function</strong>. Index the folded key; display the original string. Test the function like any other contract.</div>
+
+</section>
+<section class="slide">
+<h2>Memory amplification: where the bytes go</h2>
+<div class="cols small">
+<div>
+<p>Measured, 200,000 short synthetic terms (2–5 syllables):</p>
+<table class="tight">
+<tr><th>Component</th><th class="num">MB</th><th class="num">B/term</th></tr>
+<tr><td>The strings themselves (<code>std::string</code>)</td><td class="num">9.4</td><td class="num">47</td></tr>
+<tr><td>Sorted array index (reuses strings)</td><td class="num">0</td><td class="num">0</td></tr>
+<tr><td>Pointer trie, <code>std::map</code> children</td><td class="num">58.2</td><td class="num">291</td></tr>
+<tr><td>Same trie + cached top-10</td><td class="num">70.9</td><td class="num">354</td></tr>
+</table>
+<p class="xsmall muted">Live heap bytes via a counting <code>operator new</code>; allocator headers excluded — real RSS is higher.</p>
+</div>
+<div class="box warn">
+<span class="label">Why so much?</span>
+<ul class="xsmall">
+<li>~1 node per character not shared with another term</li>
+<li>Each node: map header + child entry node + terminal fields</li>
+<li>Each child entry is its own heap allocation</li>
+</ul>
       Scaled to 2M terms: <strong>~600 MB</strong> for the trie alone — twice the budget.
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:12</span></p>
-    <h4>Say</h4>
-    <p>"The trie does not store the strings more compactly than the strings themselves. It stores them <em>as a graph of heap objects</em>, and every edge costs roughly an order of magnitude more than the byte it represents."</p>
-    <h4>Tries do share prefixes — why no saving?</h4>
-    <p>Sharing saves one node per shared character, but each node costs ~50–100 B while the character it replaces costs 1 B (2 for Arabic). Compression only wins when the per-node cost is tiny (packed arrays, bit-level encodings, FSTs).</p>
-    <h4>Pointer-heavy structures and caches</h4>
-    <p>Beyond size: nodes allocated in insertion order end up scattered; a DFS touches each at random addresses. The sorted array's range scan is sequential memory — hardware prefetchers love it. This is why the trie loses on the benchmark even for long prefixes (Part 4).</p>
-  </aside>
-</section>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Alternatives for the same contract</h2>
-  <table class="small">
-    <tr><th>Design</th><th>Query</th><th>Memory</th><th>Updates</th></tr>
-    <tr><td>Sorted array + binary search + range scan</td><td>O(log n + range)</td><td>Minimal</td><td>Rebuild (or buffer + merge)</td></tr>
-    <tr><td>Sorted array + prefix→top-k map for |p| ≤ 3</td><td>O(1) short, O(log n + range) long</td><td>+ small table</td><td>Rebuild</td></tr>
-    <tr><td>Pointer trie + DFS</td><td>O(|p| + subtree)</td><td>High</td><td>In place</td></tr>
-    <tr><td>Trie + cached top-k per node</td><td>O(|p| + k)</td><td>Highest</td><td>Ancestor fix-up</td></tr>
-    <tr><td>Compressed (radix/Patricia) trie</td><td>O(|p|)-ish</td><td>Lower: one node per branch point</td><td>In place, complex</td></tr>
-    <tr><td>FST / DAWG (static, shares suffixes too)</td><td>O(|p| + …)</td><td>Very low</td><td>Rebuild only</td></tr>
-  </table>
-  <aside class="notes">
-    <p><span class="t">01:20</span></p>
-    <h4>Brief notes</h4>
-    <ul>
-      <li><strong>Radix / Patricia trie</strong>: collapse chains of single-child nodes into one edge labelled by a string. Node count drops from ~characters to ~branch points (≤ 2n). Implementation complexity rises: edge splitting on insert, merging on delete.</li>
-      <li><strong>FST</strong> (finite state transducer): minimal automaton sharing prefixes <em>and</em> suffixes, with outputs on arcs. Apache Lucene's suggesters use FSTs; built offline from sorted input, very compact, immutable. Introductory mention only.</li>
-      <li><strong>Ternary search tree</strong>: each node has lo/eq/hi children; memory between a trie and a BST. Mention if asked.</li>
-      <li>Updates in the sorted array: keep a small sorted "delta" of new items, query both and merge; periodically rebuild. This is the LSM idea (Week 9 relatives).</li>
-    </ul>
-    <h4>Transition</h4>
-    <p>"After the break you will choose between two of these on paper, then we measure three."</p>
-  </aside>
+<h2>Alternatives for the same contract</h2>
+<table class="small">
+<tr><th>Design</th><th>Query</th><th>Memory</th><th>Updates</th></tr>
+<tr><td>Sorted array + binary search + range scan</td><td>O(log n + range)</td><td>Minimal</td><td>Rebuild (or buffer + merge)</td></tr>
+<tr><td>Sorted array + prefix→top-k map for |p| ≤ 3</td><td>O(1) short, O(log n + range) long</td><td>+ small table</td><td>Rebuild</td></tr>
+<tr><td>Pointer trie + DFS</td><td>O(|p| + subtree)</td><td>High</td><td>In place</td></tr>
+<tr><td>Trie + cached top-k per node</td><td>O(|p| + k)</td><td>Highest</td><td>Ancestor fix-up</td></tr>
+<tr><td>Compressed (radix/Patricia) trie</td><td>O(|p|)-ish</td><td>Lower: one node per branch point</td><td>In place, complex</td></tr>
+<tr><td>FST / DAWG (static, shares suffixes too)</td><td>O(|p| + …)</td><td>Very low</td><td>Rebuild only</td></tr>
+</table>
+
+</section>
+<section class="slide divider">
+<span class="kicker">01:30–01:40</span>
+<h1>Break — 10 minutes</h1>
+<p>Teams sit together · Proposal questions welcome</p>
 </section>
 
 <section class="slide divider">
-  <span class="kicker">01:30–01:40</span>
-  <h1>Break — 10 minutes</h1>
-  <p>Teams sit together · Proposal questions welcome</p>
+<span class="kicker">Part 4 · 01:40–02:20</span>
+<h1>Exercise: compare two<br/>autocomplete architectures</h1>
 </section>
-
-<!-- ====================== PART 4 ====================== -->
-<section class="slide divider">
-  <span class="kicker">Part 4 · 01:40–02:20</span>
-  <h1>Exercise: compare two<br>autocomplete architectures</h1>
-</section>
-
 <section class="slide">
-  <h2>Exercise brief (teams, 25 minutes, on paper)</h2>
-  <div class="cols wide-l small">
-    <div>
-      <p>For the Part 1 scenario (2M suggestions, 20k q/s, ≤ 2 ms p99, 300 MB, daily re-score, hourly inserts), compare <strong>two</strong> architectures from the alternatives slide. For each:</p>
-      <ol>
-        <li>Memory estimate in bytes per suggestion — show the arithmetic</li>
-        <li>Query cost for prefix length 1 and length 6</li>
-        <li>How hourly inserts and daily re-scoring are applied</li>
-        <li>Two invariants and the test that checks each</li>
-        <li>The <strong>measurement</strong> that would decide between them</li>
-      </ol>
-      <p>End with a recommendation and the condition under which you would reverse it.</p>
-    </div>
-    <div class="box plain xsmall">
-      <span class="label">Useful numbers</span>
-      Avg suggestion ≈ 25 bytes UTF-8<br>
-      Pointer = 8 B; malloc header ≈ 16 B<br>
-      Cache miss ≈ 80–100 ns<br>
-      String compare in cache ≈ 5–20 ns<br>
+<h2>Exercise brief (teams, 25 minutes, on paper)</h2>
+<div class="cols wide-l small">
+<div>
+<p>For the Part 1 scenario (2M suggestions, 20k q/s, ≤ 2 ms p99, 300 MB, daily re-score, hourly inserts), compare <strong>two</strong> architectures from the alternatives slide. For each:</p>
+<ol>
+<li>Memory estimate in bytes per suggestion — show the arithmetic</li>
+<li>Query cost for prefix length 1 and length 6</li>
+<li>How hourly inserts and daily re-scoring are applied</li>
+<li>Two invariants and the test that checks each</li>
+<li>The <strong>measurement</strong> that would decide between them</li>
+</ol>
+<p>End with a recommendation and the condition under which you would reverse it.</p>
+</div>
+<div class="box plain xsmall">
+<span class="label">Useful numbers</span>
+      Avg suggestion ≈ 25 bytes UTF-8<br/>
+      Pointer = 8 B; malloc header ≈ 16 B<br/>
+      Cache miss ≈ 80–100 ns<br/>
+      String compare in cache ≈ 5–20 ns<br/>
       Assume: ~60% of queries have prefix length ≤ 4 (state this as an assumption; verify with a query log)
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:40</span></p>
-    <h4>Circulate; push on</h4>
-    <ul>
-      <li>Teams choosing "trie + DFS": "What is the subtree size for prefix 'a' in 2M terms?" (tens of thousands of nodes → ms).</li>
-      <li>Teams choosing "trie + cached top-k": "Bytes per node? Number of nodes?" Push to 15–25M nodes × (node + 10 × 4 B ids) — gigabytes.</li>
-      <li>Teams choosing "sorted array": "Prefix 'a' matches 100k entries. How do you get the top 10 in 2 ms?" → need the hybrid (precomputed top-k for short prefixes).</li>
-      <li>Everyone: "How do you apply daily re-scoring?" → rebuild offline and swap is simplest for all designs; in-place re-scoring is hardest for cached top-k.</li>
-    </ul>
-    <h4>A strong answer looks like</h4>
-    <p>"Sorted array of (folded key, id) + a hash map from every prefix of length ≤ 3 to its top-10 ids. Memory: 2M × (8 B offset + 4 B score + 25 B text) ≈ 75 MB + prefix table (at most ~ (alphabet)³ entries but only existing prefixes: tens of thousands × 40 B ≈ few MB). Query: O(1) for short prefixes, binary search + small range scan for longer. Updates: rebuild hourly (&lt; 5 s). Reverse the decision if suggestions need per-keystroke personalisation or real-time inserts."</p>
-    <p><span class="t">02:05</span> Ask two teams with different recommendations to present in 90 s each, then run the benchmark live.</p>
-  </aside>
-</section>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Measured: three designs, same answers</h2>
-  <table class="small">
-    <tr><th>Design (200k terms, top-10)</th><th class="num">build ms</th><th class="num">extra MB</th><th class="num">|p|=1 µs</th><th class="num">|p|=2</th><th class="num">|p|=3</th><th class="num">|p|=5</th></tr>
-    <tr><td>Sorted array + range scan</td><td class="num">0</td><td class="num">0</td><td class="num">60</td><td class="num">37</td><td class="num">9.8</td><td class="num">1.4</td></tr>
-    <tr><td>Pointer trie (<code>std::map</code>) + DFS</td><td class="num">68</td><td class="num">58</td><td class="num">1,226</td><td class="num">717</td><td class="num">103</td><td class="num">8.5</td></tr>
-    <tr><td>Trie + cached top-10 per node</td><td class="num">156</td><td class="num">71</td><td class="num">0.05</td><td class="num">0.05</td><td class="num">0.08</td><td class="num">0.16</td></tr>
-  </table>
-  <p class="xsmall muted">Best of 3 runs × 2,000 queries per length; prefixes sampled by popularity. Differential check: 0 mismatches. MinGW g++ 15 -O2. <code>Student_Resources/autocomplete_bench.cpp</code></p>
-  <div class="box key small">The plain trie — the "O(|p|)" structure — is the slowest at <strong>every</strong> prefix length and uses the most memory per useful feature. Its advantage only appears once ranking is precomputed.</div>
-  <aside class="notes">
-    <p><span class="t">02:08</span> Run <code>./ac</code> live if time permits (~20 s), or <code>./ac 50000</code> (~5 s).</p>
-    <h4>Explain each row</h4>
-    <ul>
-      <li><strong>Sorted array</strong>: short prefixes scan large contiguous ranges — sequential memory, fast per element (~5 ns/element), but 60 µs at |p|=1 because the range is ~10k entries. Scaled to 2M terms, |p|=1 would be ~0.6 ms — within 2 ms, but with little headroom for p99. The hybrid prefix table fixes exactly this.</li>
-      <li><strong>Trie + DFS</strong>: same number of candidate terms as the array, but reached by pointer-chasing through map nodes: ~20× slower than scanning. The "O(|p|)" walk is irrelevant — ranking dominates.</li>
-      <li><strong>Cached top-k</strong>: 1,000× faster than the array for short prefixes. Costs: build time, memory (and at 2M terms, ~700 MB — over budget), and hard in-place updates.</li>
-    </ul>
-    <h4>Differential check</h4>
-    <p>Point at "0 mismatches": before comparing speeds, the benchmark verifies all designs return identical results for all 8,000 queries. A benchmark of implementations that disagree is meaningless.</p>
-  </aside>
-</section>
+<h2>Measured: three designs, same answers</h2>
+<table class="small">
+<tr><th>Design (200k terms, top-10)</th><th class="num">build ms</th><th class="num">extra MB</th><th class="num">|p|=1 µs</th><th class="num">|p|=2</th><th class="num">|p|=3</th><th class="num">|p|=5</th></tr>
+<tr><td>Sorted array + range scan</td><td class="num">0</td><td class="num">0</td><td class="num">60</td><td class="num">37</td><td class="num">9.8</td><td class="num">1.4</td></tr>
+<tr><td>Pointer trie (<code>std::map</code>) + DFS</td><td class="num">68</td><td class="num">58</td><td class="num">1,226</td><td class="num">717</td><td class="num">103</td><td class="num">8.5</td></tr>
+<tr><td>Trie + cached top-10 per node</td><td class="num">156</td><td class="num">71</td><td class="num">0.05</td><td class="num">0.05</td><td class="num">0.08</td><td class="num">0.16</td></tr>
+</table>
+<p class="xsmall muted">Best of 3 runs × 2,000 queries per length; prefixes sampled by popularity. Differential check: 0 mismatches. MinGW g++ 15 -O2. <code>Student_Resources/autocomplete_bench.cpp</code></p>
+<div class="box key small">The plain trie — the "O(|p|)" structure — is the slowest at <strong>every</strong> prefix length and uses the most memory per useful feature. Its advantage only appears once ranking is precomputed.</div>
 
+</section>
 <section class="slide">
-  <h2>What this benchmark does not show</h2>
-  <div class="cols small">
-    <div>
-      <ul>
-        <li><strong>Real strings</strong>: synthetic syllable words, ASCII only; no Arabic (2-byte letters, deeper tries)</li>
-        <li><strong>Scale</strong>: 200k, not 2M; the trie may not fit in memory at 2M</li>
-        <li><strong>Tail latency</strong>: best-of-3 means, no p99</li>
-        <li><strong>Real memory</strong>: allocator headers and fragmentation excluded</li>
-      </ul>
-    </div>
-    <div>
-      <ul>
-        <li><strong>Updates</strong>: build-only; no insert/re-score costs measured</li>
-        <li><strong>Alternative child layouts</strong>: a packed-array trie would be far smaller and faster than <code>std::map</code></li>
-        <li><strong>The hybrid</strong> (array + short-prefix table) was not built</li>
-      </ul>
-    </div>
-  </div>
-  <div class="box q small" style="margin-top:14px"><span class="label">Ask</span>Which one of these gaps, if closed, is most likely to <em>change the recommendation</em>? That is the next experiment to run.</div>
-  <aside class="notes">
-    <p><span class="t">02:15</span></p>
-    <h4>Expected answer</h4>
-    <p>The biggest decision-relevant gaps: (1) memory at 2M real Arabic/English strings — likely rules the cached trie out; (2) the hybrid — likely matches cached-trie speed at array memory. A trie with packed children is a fair challenger and would weaken the "pointer-heavy" argument; an honest report says so.</p>
-    <h4>Say</h4>
-    <p>"This slide is the most important habit of the course. Every result slide in your project needs a companion slide like this one."</p>
-  </aside>
+<h2>What this benchmark does not show</h2>
+<div class="cols small">
+<div>
+<ul>
+<li><strong>Real strings</strong>: synthetic syllable words, ASCII only; no Arabic (2-byte letters, deeper tries)</li>
+<li><strong>Scale</strong>: 200k, not 2M; the trie may not fit in memory at 2M</li>
+<li><strong>Tail latency</strong>: best-of-3 means, no p99</li>
+<li><strong>Real memory</strong>: allocator headers and fragmentation excluded</li>
+</ul>
+</div>
+<div>
+<ul>
+<li><strong>Updates</strong>: build-only; no insert/re-score costs measured</li>
+<li><strong>Alternative child layouts</strong>: a packed-array trie would be far smaller and faster than <code>std::map</code></li>
+<li><strong>The hybrid</strong> (array + short-prefix table) was not built</li>
+</ul>
+</div>
+</div>
+<div class="box q small" style="margin-top:14px"><span class="label">Ask</span>Which one of these gaps, if closed, is most likely to <em>change the recommendation</em>? That is the next experiment to run.</div>
+
 </section>
 
-<!-- ====================== PART 5 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 5 · 02:20–02:35</span>
-  <h1>Testing and benchmarking autocomplete</h1>
+<span class="kicker">Part 5 · 02:20–02:35</span>
+<h1>Testing and benchmarking autocomplete</h1>
 </section>
-
 <section class="slide">
-  <h2>Test and benchmark plan</h2>
-  <div class="cols small">
-    <div>
-      <h3>Tests</h3>
-      <ul>
-        <li>Differential vs brute force: scan all terms, filter prefix, sort by contract</li>
-        <li>Terminal-state cases: term that is a prefix of another; delete one, the other survives</li>
-        <li>Empty prefix; no match; k = 0; k &gt; matches; ties</li>
-        <li>Normalisation: idempotence, fold-equal pairs, must-differ pairs, mixed scripts</li>
-        <li>Invariants after each build/insert/delete</li>
-      </ul>
-    </div>
-    <div>
-      <h3>Benchmarks</h3>
-      <ul>
-        <li>Query latency by prefix length, weighted by the real length distribution</li>
-        <li>p50 / p99, not only means</li>
-        <li>Memory: counting allocator <em>and</em> process RSS</li>
-        <li>Build time and update cost (insert, re-score, delete)</li>
-        <li>Scale sweep: 10⁵ … 2·10⁶ terms</li>
-      </ul>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">02:20</span></p>
-    <h4>Emphasise</h4>
-    <ul>
-      <li>The brute-force oracle is ~10 lines and obviously correct; it makes every other design testable (same pattern as Lectures 1–3).</li>
-      <li>Weight latency by the prefix-length distribution: a design that is 10× faster at |p|=8 but 2× slower at |p|=1 is worse for real traffic. Report a <em>workload-weighted</em> number.</li>
-      <li>Use a query log if available; otherwise state the synthetic assumption (threat to validity).</li>
-    </ul>
-    <h4>Transition</h4>
-    <p>"You have just seen the complete shape of a good project: requirements, alternatives, invariants, differential tests, measured trade-offs, and an honest list of what was not shown. Now: your proposal, due tonight."</p>
-  </aside>
+<h2>Test and benchmark plan</h2>
+<div class="cols small">
+<div>
+<h3>Tests</h3>
+<ul>
+<li>Differential vs brute force: scan all terms, filter prefix, sort by contract</li>
+<li>Terminal-state cases: term that is a prefix of another; delete one, the other survives</li>
+<li>Empty prefix; no match; k = 0; k &gt; matches; ties</li>
+<li>Normalisation: idempotence, fold-equal pairs, must-differ pairs, mixed scripts</li>
+<li>Invariants after each build/insert/delete</li>
+</ul>
+</div>
+<div>
+<h3>Benchmarks</h3>
+<ul>
+<li>Query latency by prefix length, weighted by the real length distribution</li>
+<li>p50 / p99, not only means</li>
+<li>Memory: counting allocator <em>and</em> process RSS</li>
+<li>Build time and update cost (insert, re-score, delete)</li>
+<li>Scale sweep: 10⁵ … 2·10⁶ terms</li>
+</ul>
+</div>
+</div>
+
 </section>
 
-<!-- ====================== PART 6 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 6 · 02:35–03:00</span>
-  <h1>Proposal clinic<br>Due today, 17 Oct, 23:59 Cairo</h1>
+<span class="kicker">Part 6 · 02:35–03:00</span>
+<h1>Proposal clinic<br/>Due today, 17 Oct, 23:59 Cairo</h1>
 </section>
-
 <section class="slide">
-  <h2>What a good proposal contains</h2>
-  <table class="small">
-    <tr><th>#</th><th>Section</th><th>Good looks like</th></tr>
-    <tr><td>1</td><td>Problem and user</td><td>A named system and user; what goes wrong today</td></tr>
-    <tr><td>2</td><td>Workload</td><td>Operations with ratios and rates; data sizes; distributions; source of the data</td></tr>
-    <tr><td>3</td><td>Constraints</td><td>Numbers: latency with percentile, memory budget, update latency</td></tr>
-    <tr><td>4</td><td>Candidate designs</td><td>≥ 2 + a simple baseline, each with the assumption it relies on</td></tr>
-    <tr><td>5</td><td>Hypothesis</td><td>Expected result and the result that would change your decision</td></tr>
-    <tr><td>6</td><td>API sketch</td><td>Operations with edge-case semantics</td></tr>
-    <tr><td>7</td><td>Evaluation plan</td><td>Oracle/invariants for correctness; variables, metrics, baselines for experiments</td></tr>
-    <tr><td>8</td><td>Risks and scope</td><td>Explicit non-goals; fallback if the main design fails</td></tr>
-    <tr><td>9</td><td>Team plan</td><td>Ownership; everyone touches design, code and evidence</td></tr>
-  </table>
-  <aside class="notes">
-    <p><span class="t">02:35</span></p>
-    <h4>Say</h4>
-    <p>"Today's lecture was a proposal in miniature: section 1–3 was Part 1, section 4 was the alternatives slide, section 5 was 'which gap would change the recommendation', section 7 was the differential check and the benchmark. Use it as a model."</p>
-    <p>Template: <code>03_Project/templates/proposal_template.md</code>. Max 4 pages. The proposal itself is not graded; it is feedback. But the final project's "problem formulation" (2 marks) and "architecture/design" (3 marks) criteria grow from it.</p>
-  </aside>
-</section>
+<h2>What a good proposal contains</h2>
+<table class="small">
+<tr><th>#</th><th>Section</th><th>Good looks like</th></tr>
+<tr><td>1</td><td>Problem and user</td><td>A named system and user; what goes wrong today</td></tr>
+<tr><td>2</td><td>Workload</td><td>Operations with ratios and rates; data sizes; distributions; source of the data</td></tr>
+<tr><td>3</td><td>Constraints</td><td>Numbers: latency with percentile, memory budget, update latency</td></tr>
+<tr><td>4</td><td>Candidate designs</td><td>≥ 2 + a simple baseline, each with the assumption it relies on</td></tr>
+<tr><td>5</td><td>Hypothesis</td><td>Expected result and the result that would change your decision</td></tr>
+<tr><td>6</td><td>API sketch</td><td>Operations with edge-case semantics</td></tr>
+<tr><td>7</td><td>Evaluation plan</td><td>Oracle/invariants for correctness; variables, metrics, baselines for experiments</td></tr>
+<tr><td>8</td><td>Risks and scope</td><td>Explicit non-goals; fallback if the main design fails</td></tr>
+<tr><td>9</td><td>Team plan</td><td>Ownership; everyone touches design, code and evidence</td></tr>
+</table>
 
+</section>
 <section class="slide">
-  <h2>Weak vs strong: the same project, two proposals</h2>
-  <div class="cols small">
-    <div class="box bad">
-      <span class="label">Weak</span>
-      <p class="xsmall">"We will build a fast autocomplete using a trie because tries have O(m) lookup. We will test it with unit tests and benchmark it to show it is fast. It will support insert, delete and search."</p>
-      <ul class="xsmall">
-        <li>Structure chosen before the problem</li>
-        <li>No workload, no numbers, no alternative</li>
-        <li>"Show it is fast": conclusion fixed in advance</li>
-      </ul>
-    </div>
-    <div class="box good">
-      <span class="label">Strong</span>
-      <p class="xsmall">"Suggestions for a 500k-product catalogue (published dataset X), Arabic + English, 2 ms p99, 150 MB. Candidates: sorted array (baseline), array + short-prefix top-k table, radix trie with cached top-k. Hypothesis: the hybrid matches the trie's p99 at &lt; 30% of its memory; if the trie is within 1.5× memory, we choose it for in-place updates. Oracle: brute-force scan."</p>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">02:42</span></p>
-    <h4>Common weaknesses I expect (tell them)</h4>
-    <ol>
-      <li>No numbers anywhere ("large", "fast", "efficient").</li>
-      <li>Only one design, or two designs with no baseline.</li>
-      <li>A hypothesis that cannot fail ("our design will perform well").</li>
-      <li>Workload invented without justification; no mention of a dataset.</li>
-      <li>Scope too big (a distributed database) or too small (one class).</li>
-      <li>Team plan where one person "does testing" only.</li>
-    </ol>
-  </aside>
-</section>
+<h2>Weak vs strong: the same project, two proposals</h2>
+<div class="cols small">
+<div class="box bad">
+<span class="label">Weak</span>
+<p class="xsmall">"We will build a fast autocomplete using a trie because tries have O(m) lookup. We will test it with unit tests and benchmark it to show it is fast. It will support insert, delete and search."</p>
+<ul class="xsmall">
+<li>Structure chosen before the problem</li>
+<li>No workload, no numbers, no alternative</li>
+<li>"Show it is fast": conclusion fixed in advance</li>
+</ul>
+</div>
+<div class="box good">
+<span class="label">Strong</span>
+<p class="xsmall">"Suggestions for a 500k-product catalogue (published dataset X), Arabic + English, 2 ms p99, 150 MB. Candidates: sorted array (baseline), array + short-prefix top-k table, radix trie with cached top-k. Hypothesis: the hybrid matches the trie's p99 at &lt; 30% of its memory; if the trie is within 1.5× memory, we choose it for in-place updates. Oracle: brute-force scan."</p>
+</div>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Submission and what comes next</h2>
-  <div class="cols small">
-    <div>
-      <h3>Tonight, 23:59 Cairo</h3>
-      <ul>
-        <li>Commit <code>docs/proposal.md</code> to your team repository</li>
-        <li>Turn in on Classroom: repo URL + commit hash</li>
-        <li>File name if uploading a PDF copy: <code>SE618_T##_Proposal.pdf</code></li>
-        <li>Feedback returned by Sat 24 Oct</li>
-      </ul>
-    </div>
-    <div>
-      <h3>Next milestones</h3>
-      <table class="tight">
-        <tr><td>24 Oct</td><td>Proposal feedback</td></tr>
-        <tr class="hl"><td>31 Oct</td><td>Architecture / design / API document</td></tr>
-        <tr class="hl"><td>07 Nov</td><td>Written midterm (Weeks 1–6, 90 min)</td></tr>
-        <tr><td>21 Nov</td><td>Prototype checkpoint</td></tr>
-      </table>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">02:50</span></p>
-    <p>Topic changes after today require approval by email with a revised one-page proposal.</p>
-    <p>Midterm reminder: it covers Weeks 1–6 and tests reasoning — today's exercise is representative of Q3 (design trade-offs) and the "does not show" slide of Q5 (interpreting evidence).</p>
-  </aside>
-</section>
+<h2>Submission and what comes next</h2>
+<div class="cols small">
+<div>
+<h3>Tonight, 23:59 Cairo</h3>
+<ul>
+<li>Commit <code>docs/proposal.md</code> to your team repository</li>
+<li>Turn in on Classroom: repo URL + commit hash</li>
+<li>File name if uploading a PDF copy: <code>SE618_T##_Proposal.pdf</code></li>
+<li>Feedback returned by Sat 24 Oct</li>
+</ul>
+</div>
+<div>
+<h3>Next milestones</h3>
+<table class="tight">
+<tr><td>24 Oct</td><td>Proposal feedback</td></tr>
+<tr class="hl"><td>31 Oct</td><td>Architecture / design / API document</td></tr>
+<tr class="hl"><td>07 Nov</td><td>Written midterm (Weeks 1–6, 90 min)</td></tr>
+<tr><td>21 Nov</td><td>Prototype checkpoint</td></tr>
+</table>
+</div>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Summary</h2>
-  <ol>
-    <li>For autocomplete, finding the prefix is cheap; <strong>ranking the matches</strong> is the cost.</li>
-    <li>Terminal state and careful pruning are what make a trie correct.</li>
-    <li>Child representation determines memory; pointer-heavy tries amplify bytes 5–10×.</li>
-    <li>Normalisation (Unicode, Arabic folding, case) is a product contract shared by index and query.</li>
-    <li>Sorted arrays keep matches contiguous; a small precomputed table can remove their weak spot.</li>
-    <li>Choose by measured memory and latency <em>under the real prefix-length distribution</em>.</li>
-  </ol>
-  <p class="small muted">Next: Lecture 5 · Sat 24 Oct — Search Systems and Inverted Indexes.</p>
-  <aside class="notes"><p>Exit question: "Name a structure in your own project whose complexity you were relying on. What is the cost that complexity hides?"</p></aside>
-</section>
+<h2>Summary</h2>
+<ol>
+<li>For autocomplete, finding the prefix is cheap; <strong>ranking the matches</strong> is the cost.</li>
+<li>Terminal state and careful pruning are what make a trie correct.</li>
+<li>Child representation determines memory; pointer-heavy tries amplify bytes 5–10×.</li>
+<li>Normalisation (Unicode, Arabic folding, case) is a product contract shared by index and query.</li>
+<li>Sorted arrays keep matches contiguous; a small precomputed table can remove their weak spot.</li>
+<li>Choose by measured memory and latency <em>under the real prefix-length distribution</em>.</li>
+</ol>
+<p class="small muted">Next: Lecture 5 · Sat 24 Oct — Search Systems and Inverted Indexes.</p>
 
+</section>
 <script src="../common/slides.js"></script>
 </body>
 </html>

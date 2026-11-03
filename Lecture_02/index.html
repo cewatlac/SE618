@@ -1,179 +1,125 @@
+<!doctype html>
 <!DOCTYPE html>
+
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1" name="viewport"/>
 <title>SE618 L2 — Production Hash Maps</title>
-<link rel="stylesheet" href="../common/styles.css">
-<link rel="stylesheet" href="../common/print.css">
-</head>
-<body data-course="SE618" data-lecture="Lecture 2 · Sat 03 Oct 2026">
-
+<link href="../common/styles.css" rel="stylesheet"/>
+<link href="../common/print.css" rel="stylesheet"/>
+<meta content="SE618 Lecture 2: Production Hash Maps. Student-facing interactive slides." name="description"/></head>
+<body data-course="SE618" data-lecture="Lecture 2 · Sat 03 Oct 2026" data-public="true">
 <section class="slide title">
-  <span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
-  <h1>Lecture 2<br>Production Hash Maps</h1>
-  <p>Expected O(1) is a conditional promise. Today we read the conditions.</p>
-  <div class="meta">Saturday 3 October 2026 · 3 hours<br>Milestone today: team formation + preliminary topic</div>
-  <aside class="notes">
-    <h4>Plan (3h)</h4>
-    <table><tr><td>00:00–00:20</td><td>Part 1 — Incident: a rate limiter melts after an ID migration</td></tr>
-    <tr><td>00:20–01:00</td><td>Part 2 — Contracts: hashing, equality, distribution, adversaries</td></tr>
-    <tr><td>01:00–01:30</td><td>Part 3 — Collisions, load, resizing, deletion, iteration, layout</td></tr>
-    <tr><td>01:30–01:40</td><td>Break (collect team registrations)</td></tr>
-    <tr><td>01:40–02:20</td><td>Part 4 — Lab: debugging a flawed open-addressing map</td></tr>
-    <tr><td>02:20–02:45</td><td>Part 5 — Benchmarking against std::unordered_map</td></tr>
-    <tr><td>02:45–03:00</td><td>Part 6 — API design, invariants, project connection</td></tr></table>
-    <h4>Prepare</h4>
-    <p>Lab files in <code>Student_Resources/</code>: <code>flawed_hash_map.hpp</code>, <code>hash_map_test.cpp</code>, <code>hash_map_bench.cpp</code>. Solution in <code>Instructor_Only/Lecture_02/fixed_hash_map.hpp</code> — do <strong>not</strong> upload the <code>instructor/</code> folder before class ends. Upload the three student files to Classroom before class so students can download them during the break.</p>
-    <p>Build lines are at the top of each file. The flawed benchmark takes ~10 s; compile it before class so you can run it live.</p>
-  </aside>
-</section>
+<span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
+<h1>Lecture 2<br/>Production Hash Maps</h1>
+<p>Expected O(1) is a conditional promise. Today we read the conditions.</p>
+<div class="meta">Saturday 3 October 2026 · 3 hours<br/>Milestone today: team formation + preliminary topic</div>
 
+</section>
 <section class="slide">
-  <h2>Where we are</h2>
-  <div class="cols">
-    <div class="small">
-      <h3>Lecture 1 established</h3>
-      <ul>
-        <li>Requirements and workload precede structure</li>
-        <li>Contracts make outcomes explicit; invariants protect the representation</li>
-        <li>Evidence: differential tests, benchmarks that say what they <em>don't</em> show</li>
-      </ul>
-    </div>
-    <div class="box key">
-      <span class="label">Today's distinctive lesson</span>
+<h2>Where we are</h2>
+<div class="cols">
+<div class="small">
+<h3>Lecture 1 established</h3>
+<ul>
+<li>Requirements and workload precede structure</li>
+<li>Contracts make outcomes explicit; invariants protect the representation</li>
+<li>Evidence: differential tests, benchmarks that say what they <em>don't</em> show</li>
+</ul>
+</div>
+<div class="box key">
+<span class="label">Today's distinctive lesson</span>
       A hash map's "O(1)" depends on assumptions about <strong>keys, the hash function, load, deletion policy, memory layout and the adversary</strong>. Break any one and the promise quietly disappears.
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:00</span> 2 minutes. Ask one student to state the "ten questions" from last week from memory; fill gaps.</p>
-    <p>Remind: team registrations are due today — collect at the break (names, IDs, repo URL, one-paragraph problem). Unassigned students will be grouped at the end.</p>
-  </aside>
+</div>
+
 </section>
 
-<!-- ====================== PART 1 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 1 · 00:00–00:20</span>
-  <h1>Incident: the rate limiter<br>that stopped limiting</h1>
+<span class="kicker">Part 1 · 00:00–00:20</span>
+<h1>Incident: the rate limiter<br/>that stopped limiting</h1>
 </section>
-
 <section class="slide">
-  <h2>The incident</h2>
-  <div class="cols wide-l small">
-    <div>
-      <p>An API gateway keeps per-client rate-limit counters in an in-house open-addressing hash map (<code>uint64 client_id → counter</code>, ~60k active clients).</p>
-      <p>Platform migrates client IDs to a new scheme:</p>
-      <pre><code>client_id = (sequence &lt;&lt; 12) | region_code</code></pre>
-      <p>Within an hour of the migration: gateway CPU at 100%, p99 latency from 0.4 ms to 900 ms. <strong>No code changed in the gateway.</strong> All unit tests pass.</p>
-    </div>
-    <div class="box q"><span class="label">Pairs · 3 min</span>
+<h2>The incident</h2>
+<div class="cols wide-l small">
+<div>
+<p>An API gateway keeps per-client rate-limit counters in an in-house open-addressing hash map (<code>uint64 client_id → counter</code>, ~60k active clients).</p>
+<p>Platform migrates client IDs to a new scheme:</p>
+<pre><code>client_id = (sequence &lt;&lt; 12) | region_code</code></pre>
+<p>Within an hour of the migration: gateway CPU at 100%, p99 latency from 0.4 ms to 900 ms. <strong>No code changed in the gateway.</strong> All unit tests pass.</p>
+</div>
+<div class="box q"><span class="label">Pairs · 3 min</span>
       Propose two hypotheses. For each: what measurement would confirm it?</div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:03</span></p>
-    <h4>Let them hypothesise</h4>
-    <p>Typical answers: "more clients" (no — same count), "memory leak", "lock contention", "GC". Push: "What changed? Only the <em>distribution of the keys</em>."</p>
-    <h4>The actual mechanism (reveal on next slide)</h4>
-    <p>libstdc++ and libc++ implement <code>std::hash&lt;uint64_t&gt;</code> as the <strong>identity</strong>. The in-house map computes the slot as <code>hash &amp; (capacity − 1)</code> (power-of-two capacity). With a 128k-slot table, only the low 17 bits matter. Old IDs had random low bits. New IDs: the low 12 bits are the region code (a handful of values), and the sequence contributes only 5 bits above that. So ~60k keys land in a few thousand slots → giant linear-probing clusters → every lookup scans hundreds or thousands of slots.</p>
-    <h4>Measurements that confirm</h4>
-    <p>Profile: time in <code>find</code>. Instrument: average probe length (a production map should export this). Histogram of <code>hash &amp; mask</code> over live keys. This is exactly the "observability" point from Lecture 1.</p>
-    <h4>Real-world analogues</h4>
-    <p>Many teams have hit this with pointer keys (allocations are 16-byte aligned, so low 4 bits are always zero), with IDs that are multiples of page sizes, and with timestamps in milliseconds rounded to seconds.</p>
-  </aside>
-</section>
+</div>
 
+</section>
 <section class="slide">
-  <h2>What actually happened</h2>
-  <div class="cols wide-r">
-    <div class="small">
-      <ul>
-        <li><code>std::hash&lt;uint64_t&gt;</code> is the <strong>identity</strong> in libstdc++ and libc++</li>
-        <li>Slot = <code>hash &amp; (capacity − 1)</code> keeps only the <strong>low bits</strong></li>
-        <li>New IDs share their low 12 bits → keys pile into a few slots</li>
-        <li>Linear probing turns piles into long clusters</li>
-      </ul>
-    </div>
-    <table class="tight">
-      <tr><th>Lookup, 65k keys (ns/op)</th><th class="num">random IDs</th><th class="num">IDs &lt;&lt; 12</th></tr>
-      <tr><td>std::unordered_map</td><td class="num">12</td><td class="num">3</td></tr>
-      <tr><td>FlatMap, identity hash</td><td class="num">6</td><td class="num"><strong>838</strong></td></tr>
-      <tr><td>FlatMap, mixed hash</td><td class="num">8</td><td class="num">8</td></tr>
-    </table>
-  </div>
-  <div class="box warn">Nothing was wrong with the algorithm. An <strong>unstated assumption about key distribution</strong> was violated by a change in another team's system.</div>
-  <aside class="notes">
-    <p><span class="t">00:10</span></p>
-    <h4>Numbers</h4>
-    <p>From <code>Student_Resources/hash_map_bench.cpp</code> (median of 5, MinGW g++ 15 -O2, instructor laptop). "IDs &lt;&lt; 12" = keys <code>i &lt;&lt; 12</code>. Consider running it live.</p>
-    <h4>Why is std::unordered_map fine (even faster) on the strided keys?</h4>
-    <p>libstdc++ uses a <strong>prime</strong> bucket count and <code>hash % bucket_count</code>. Modulo a prime uses all bits of the hash, so structured keys spread. Its identity hash + prime modulus is a deliberate pairing. It is even faster than random here because consecutive strided keys hit sequential buckets, which is cache-friendly. Power-of-two tables (Abseil, Folly F14, Rust's hashbrown, our FlatMap) are faster at computing the index (mask vs division — division is ~20–40 cycles) but <em>require</em> a hash with good low bits, so they mix the hash first.</p>
-    <h4>The engineering lesson</h4>
-    <p>The hash function and the index-reduction are a <strong>matched pair</strong>. Swapping one without the other is a latent bug that waits for a key distribution change.</p>
-  </aside>
-</section>
+<h2>What actually happened</h2>
+<div class="cols wide-r">
+<div class="small">
+<ul>
+<li><code>std::hash&lt;uint64_t&gt;</code> is the <strong>identity</strong> in libstdc++ and libc++</li>
+<li>Slot = <code>hash &amp; (capacity − 1)</code> keeps only the <strong>low bits</strong></li>
+<li>New IDs share their low 12 bits → keys pile into a few slots</li>
+<li>Linear probing turns piles into long clusters</li>
+</ul>
+</div>
+<table class="tight">
+<tr><th>Lookup, 65k keys (ns/op)</th><th class="num">random IDs</th><th class="num">IDs &lt;&lt; 12</th></tr>
+<tr><td>std::unordered_map</td><td class="num">12</td><td class="num">3</td></tr>
+<tr><td>FlatMap, identity hash</td><td class="num">6</td><td class="num"><strong>838</strong></td></tr>
+<tr><td>FlatMap, mixed hash</td><td class="num">8</td><td class="num">8</td></tr>
+</table>
+</div>
+<div class="box warn">Nothing was wrong with the algorithm. An <strong>unstated assumption about key distribution</strong> was violated by a change in another team's system.</div>
 
+</section>
 <section class="slide">
-  <h2>The conditions behind "expected O(1)"</h2>
-  <table class="small">
-    <tr><th>Assumption</th><th>Violated by</th><th>Symptom</th></tr>
-    <tr><td>Hash spreads keys uniformly</td><td>Weak hash + structured keys</td><td>Clusters, long probes</td></tr>
-    <tr><td>Keys are not chosen adversarially</td><td>Attacker controls keys (HTTP params, JSON fields)</td><td>O(n) per op → DoS</td></tr>
-    <tr><td>Load factor bounded</td><td>Tombstones not counted; no resize</td><td>Misses scan the table</td></tr>
-    <tr><td>Rehash cost amortised away</td><td>Latency-sensitive single request</td><td>p99/p999 spikes</td></tr>
-    <tr><td>Memory access ≈ constant</td><td>Table ≫ cache, node-based layout</td><td>Cache misses dominate</td></tr>
-    <tr><td>Hash/equality are cheap</td><td>Long string keys, deep structs</td><td>"O(1)" of large constant</td></tr>
-  </table>
-  <aside class="notes">
-    <p><span class="t">00:15</span></p>
-    <h4>Say</h4>
-    <p>"This table is the outline of today. Each row is a condition; each is a way production hash maps fail."</p>
-    <h4>Precise statement</h4>
-    <p>The classical result: with simple uniform hashing (or universal hashing with a randomly chosen function), the expected cost of an operation is O(1 + α) for chaining, where α = n/m is the load factor. "Expected" is over the <strong>random choice of hash function</strong> (universal hashing) or over a <strong>random input distribution</strong> (simple uniform hashing assumption). A fixed, public hash function gives no guarantee against a chosen input — that is the adversarial row.</p>
-  </aside>
+<h2>The conditions behind "expected O(1)"</h2>
+<table class="small">
+<tr><th>Assumption</th><th>Violated by</th><th>Symptom</th></tr>
+<tr><td>Hash spreads keys uniformly</td><td>Weak hash + structured keys</td><td>Clusters, long probes</td></tr>
+<tr><td>Keys are not chosen adversarially</td><td>Attacker controls keys (HTTP params, JSON fields)</td><td>O(n) per op → DoS</td></tr>
+<tr><td>Load factor bounded</td><td>Tombstones not counted; no resize</td><td>Misses scan the table</td></tr>
+<tr><td>Rehash cost amortised away</td><td>Latency-sensitive single request</td><td>p99/p999 spikes</td></tr>
+<tr><td>Memory access ≈ constant</td><td>Table ≫ cache, node-based layout</td><td>Cache misses dominate</td></tr>
+<tr><td>Hash/equality are cheap</td><td>Long string keys, deep structs</td><td>"O(1)" of large constant</td></tr>
+</table>
+
 </section>
 
-<!-- ====================== PART 2 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 2 · 00:20–01:00</span>
-  <h1>Contracts: hashing, equality<br>and the adversary</h1>
+<span class="kicker">Part 2 · 00:20–01:00</span>
+<h1>Contracts: hashing, equality<br/>and the adversary</h1>
 </section>
-
 <section class="slide">
-  <h2>The hashing contract</h2>
-  <div class="cols">
-    <div class="small">
-      <h3>Required (correctness)</h3>
-      <ol>
-        <li><code>eq(a, b)</code> ⇒ <code>hash(a) == hash(b)</code></li>
-        <li><code>eq</code> is an equivalence relation</li>
-        <li>Hash and equality of a key <strong>must not change</strong> while it is in the map</li>
-        <li>Deterministic within the process</li>
-      </ol>
-    </div>
-    <div class="small">
-      <h3>Desired (performance)</h3>
-      <ul>
-        <li>Unequal keys rarely collide <em>in the bits the table uses</em></li>
-        <li>Cheap to compute relative to the lookup</li>
-        <li>Resistant to chosen inputs, if keys are untrusted</li>
-      </ul>
-      <div class="box warn xsmall" style="margin-top:12px">Violating a "required" rule gives <strong>wrong answers</strong>. Violating a "desired" rule gives <strong>slow answers</strong> — much harder to notice.</div>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:20</span></p>
-    <h4>Rule 3 in practice</h4>
-    <p>A key is a struct; someone mutates a field through a pointer after insertion. The entry is now in the wrong bucket: <code>find</code> with the new value misses it, <code>find</code> with the old value finds the bucket but equality fails. The map is corrupted with no crash. C++ makes the key <code>const</code> in <code>value_type</code> precisely to prevent this; but keys holding pointers to mutable data escape that protection.</p>
-    <h4>Rule 4</h4>
-    <p>Not necessarily across processes: many languages randomise hash seeds per process (Python since 3.3 for str, Rust's default SipHash with random keys). Consequence: never persist hash values or rely on iteration order across runs.</p>
-    <h4>Ask</h4>
-    <p>"Is <code>hash(x) = 0</code> for all x a correct hash function?" Yes — correct, and every operation O(n). A great test tool: it forces every collision path (use it in Part 5's test strategy).</p>
-  </aside>
+<h2>The hashing contract</h2>
+<div class="cols">
+<div class="small">
+<h3>Required (correctness)</h3>
+<ol>
+<li><code>eq(a, b)</code> ⇒ <code>hash(a) == hash(b)</code></li>
+<li><code>eq</code> is an equivalence relation</li>
+<li>Hash and equality of a key <strong>must not change</strong> while it is in the map</li>
+<li>Deterministic within the process</li>
+</ol>
+</div>
+<div class="small">
+<h3>Desired (performance)</h3>
+<ul>
+<li>Unequal keys rarely collide <em>in the bits the table uses</em></li>
+<li>Cheap to compute relative to the lookup</li>
+<li>Resistant to chosen inputs, if keys are untrusted</li>
+</ul>
+<div class="box warn xsmall" style="margin-top:12px">Violating a "required" rule gives <strong>wrong answers</strong>. Violating a "desired" rule gives <strong>slow answers</strong> — much harder to notice.</div>
+</div>
+</div>
+
 </section>
-
 <section class="slide">
-  <h2>Spot the bug</h2>
-  <pre class="sm"><code>struct Email { std::string addr; };
+<h2>Spot the bug</h2>
+<pre class="sm"><code>struct Email { std::string addr; };
 
 struct EmailEq {                       // "emails are case-insensitive"
     bool operator()(const Email&amp; a, const Email&amp; b) const {
@@ -189,360 +135,229 @@ struct EmailHash {
 std::unordered_map&lt;Email, UserId, EmailHash, EmailEq&gt; users;
 users[{"Ali@Example.com"}] = 42;
 auto it = users.find({"ali@example.com"});   // ?</code></pre>
-  <aside class="notes">
-    <p><span class="t">00:27</span> Give 60 seconds.</p>
-    <h4>Answer</h4>
-    <p>Equality is case-insensitive; hash is case-sensitive. The two strings are equal under <code>EmailEq</code> but hash differently → rule 1 violated → <code>find</code> usually misses (it looks in a different bucket), but <em>occasionally</em> finds it when the two hashes happen to land in the same bucket. Non-deterministic-looking bug, depends on table size. Worse: <code>users[...]</code> can create a <em>second</em> entry for the same logical user → duplicate accounts.</p>
-    <h4>Fix options</h4>
-    <ul>
-      <li>Hash the case-folded string (and fold the same way in equality).</li>
-      <li>Better design: <strong>normalise at the boundary</strong> — store a canonical lower-cased <code>Email</code> type, so plain equality and plain hash are correct by construction. Normalisation is a recurring theme; it returns in Lecture 4 (Unicode).</li>
-    </ul>
-    <h4>Deeper point</h4>
-    <p>Is email local-part really case-insensitive? RFC 5321 says the local part <em>may</em> be case-sensitive; most providers treat it as insensitive. This is a <strong>product decision</strong> encoded in an equality function. Good engineering writes it down.</p>
-  </aside>
-</section>
 
+</section>
 <section class="slide">
-  <h2>Hash quality: which bits does the table use?</h2>
-  <div class="cols">
-    <div class="small">
-      <table class="tight">
-        <tr><th>Index reduction</th><th>Cost</th><th>Needs from hash</th></tr>
-        <tr><td><code>h % prime</code></td><td>~20–40 cycles</td><td>Any varying bits</td></tr>
-        <tr><td><code>h &amp; (2ᵏ − 1)</code></td><td>1 cycle</td><td>Good <strong>low</strong> bits</td></tr>
-        <tr><td><code>(h × m) &gt;&gt; (64 − k)</code></td><td>~3 cycles</td><td>Good bits overall</td></tr>
-      </table>
-      <p style="margin-top:12px">Mixing ("finalising") fixes weak hashes cheaply:</p>
-    </div>
-    <pre class="sm"><code>uint64_t mix64(uint64_t x) {   // splitmix64
+<h2>Hash quality: which bits does the table use?</h2>
+<div class="cols">
+<div class="small">
+<table class="tight">
+<tr><th>Index reduction</th><th>Cost</th><th>Needs from hash</th></tr>
+<tr><td><code>h % prime</code></td><td>~20–40 cycles</td><td>Any varying bits</td></tr>
+<tr><td><code>h &amp; (2ᵏ − 1)</code></td><td>1 cycle</td><td>Good <strong>low</strong> bits</td></tr>
+<tr><td><code>(h × m) &gt;&gt; (64 − k)</code></td><td>~3 cycles</td><td>Good bits overall</td></tr>
+</table>
+<p style="margin-top:12px">Mixing ("finalising") fixes weak hashes cheaply:</p>
+</div>
+<pre class="sm"><code>uint64_t mix64(uint64_t x) {   // splitmix64
     x ^= x &gt;&gt; 30;
     x *= 0xbf58476d1ce4e5b9ULL;
     x ^= x &gt;&gt; 27;
     x *= 0x94d049bb133111ebULL;
     return x ^ (x &gt;&gt; 31);
 }</code></pre>
-  </div>
-  <div class="box key small">Avalanche: flipping one input bit should flip each output bit with probability ≈ ½. Identity hashing has zero avalanche.</div>
-  <aside class="notes">
-    <p><span class="t">00:32</span></p>
-    <h4>Explain the three reductions</h4>
-    <ul>
-      <li><strong>Modulo prime</strong>: libstdc++'s choice. Robust to weak hashes; division is slow; resizing must jump to the next prime in a table.</li>
-      <li><strong>Mask</strong>: fastest; demands good low bits. Abseil/hashbrown/F14 all mix the user's hash first.</li>
-      <li><strong>Fibonacci / multiplicative hashing</strong> (Knuth): multiply by ≈2⁶⁴/φ and take the top k bits. Cheap and uses all bits.</li>
-    </ul>
-    <h4>Cost of mixing</h4>
-    <p>Two multiplies and three shifts: ~3–5 ns worst case, usually hidden by memory latency. Our benchmark: FlatMap random-key lookup 6 → 8 ns with mixing, strided 838 → 8 ns. Pay 2 ns everywhere to remove a 100× cliff: that is the kind of trade you should be able to argue.</p>
-    <h4>For strings</h4>
-    <p>Production string hashes: wyhash, xxHash3, SipHash (keyed, DoS-resistant, slower), CityHash/FarmHash. Hashing a 36-byte key costs more than the table probe for small tables.</p>
-  </aside>
-</section>
+</div>
+<div class="box key small">Avalanche: flipping one input bit should flip each output bit with probability ≈ ½. Identity hashing has zero avalanche.</div>
 
+</section>
 <section class="slide">
-  <h2>Adversarial inputs: hash flooding</h2>
-  <div class="cols wide-l small">
-    <div>
-      <p>If an attacker can choose keys and knows the hash function, they can send <em>n</em> keys that all collide → each insert O(n) → Θ(n²) total.</p>
-      <p>2011: one ~2 MB HTTP POST with crafted form-field names kept a CPU core busy for minutes in PHP, Java, Python, Ruby, ASP.NET servers.</p>
-      <h3>Defences</h3>
-      <ul>
-        <li>Keyed hash with a secret per-process seed (SipHash)</li>
-        <li>Limit untrusted input size (field counts, JSON keys)</li>
-        <li>Bucket overflow into a balanced tree (Java 8 <code>HashMap</code>)</li>
-      </ul>
-    </div>
-    <div class="box q"><span class="label">Ask</span>Our rate-limiter keys are client IDs we assign. Do we need SipHash? What about a map keyed by <code>User-Agent</code> strings?</div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:38</span></p>
-    <h4>Background</h4>
-    <p>Klink &amp; Wälde, "Efficient Denial of Service Attacks on Web Application Platforms", 28C3 (Dec 2011). The fix across languages was randomised/keyed hashing. Python adopted SipHash for str (PEP 456); Rust's <code>HashMap</code> uses SipHash-1-3 with random keys by default; Java 8 converts long bucket chains to red-black trees (worst case O(log n) per bucket).</p>
-    <h4>Expected answer</h4>
-    <ul>
-      <li>Client IDs we assign: not attacker-chosen → a fast non-keyed hash + mixing is fine. But beware: <em>who</em> chooses IDs can change later (the incident!).</li>
-      <li><code>User-Agent</code>: attacker-controlled strings → keyed hash, or cap the map size, or don't key on it.</li>
-    </ul>
-    <h4>Engineering point</h4>
-    <p>The threat model is a <strong>requirement</strong>. "Where do keys come from?" belongs in the design document, next to the hash function choice.</p>
-    <h4>C++ note</h4>
-    <p><code>std::hash</code> is not keyed and gives no DoS resistance. Use a keyed hash for untrusted keys.</p>
-  </aside>
-</section>
+<h2>Adversarial inputs: hash flooding</h2>
+<div class="cols wide-l small">
+<div>
+<p>If an attacker can choose keys and knows the hash function, they can send <em>n</em> keys that all collide → each insert O(n) → Θ(n²) total.</p>
+<p>2011: one ~2 MB HTTP POST with crafted form-field names kept a CPU core busy for minutes in PHP, Java, Python, Ruby, ASP.NET servers.</p>
+<h3>Defences</h3>
+<ul>
+<li>Keyed hash with a secret per-process seed (SipHash)</li>
+<li>Limit untrusted input size (field counts, JSON keys)</li>
+<li>Bucket overflow into a balanced tree (Java 8 <code>HashMap</code>)</li>
+</ul>
+</div>
+<div class="box q"><span class="label">Ask</span>Our rate-limiter keys are client IDs we assign. Do we need SipHash? What about a map keyed by <code>User-Agent</code> strings?</div>
+</div>
 
+</section>
 <section class="slide">
-  <h2>API promises shape everything downstream</h2>
-  <table class="small">
-    <tr><th><code>std::unordered_map</code> promises…</th><th>…which forces</th></tr>
-    <tr><td>References/pointers to elements stay valid across rehash</td><td>Node-based storage: one allocation per element</td></tr>
-    <tr><td>Bucket interface (<code>bucket()</code>, <code>bucket_size()</code>, local iterators)</td><td>Chaining with an exposed bucket array</td></tr>
-    <tr><td><code>max_load_factor()</code> settable, default 1.0</td><td>Chains, not open addressing</td></tr>
-    <tr><td>Erase does not invalidate other iterators</td><td>No backward-shift compaction</td></tr>
-  </table>
-  <div class="box key" style="margin-top:14px">A standard container is frozen by its contract. Faster designs (Swiss tables, F14) exist precisely because they <strong>promise less</strong>.</div>
-  <aside class="notes">
-    <p><span class="t">00:44</span></p>
-    <h4>Say</h4>
-    <p>"Why is <code>std::unordered_map</code> slower than Abseil's <code>flat_hash_map</code>? Not because the standard library authors are bad engineers. Because the C++11 specification promised reference stability and a bucket API, and those promises can only be met by a node-based chained table. Contracts outlive implementations — this is Lecture 1's Hyrum's Law at the scale of a language standard."</p>
-    <h4>Abseil's trade</h4>
-    <p><code>absl::flat_hash_map</code>: values stored inline; any insert may rehash and invalidate all pointers. <code>absl::node_hash_map</code>: stable pointers, one allocation per element — offered for users who need the old promise. Choice made explicit in the type name.</p>
-    <h4>Ask</h4>
-    <p>"If your project's API returns <code>V*</code> from <code>find</code>, what must you document?" → lifetime: valid until the next mutating call. This is exactly what the lab map documents.</p>
-  </aside>
-</section>
+<h2>API promises shape everything downstream</h2>
+<table class="small">
+<tr><th><code>std::unordered_map</code> promises…</th><th>…which forces</th></tr>
+<tr><td>References/pointers to elements stay valid across rehash</td><td>Node-based storage: one allocation per element</td></tr>
+<tr><td>Bucket interface (<code>bucket()</code>, <code>bucket_size()</code>, local iterators)</td><td>Chaining with an exposed bucket array</td></tr>
+<tr><td><code>max_load_factor()</code> settable, default 1.0</td><td>Chains, not open addressing</td></tr>
+<tr><td>Erase does not invalidate other iterators</td><td>No backward-shift compaction</td></tr>
+</table>
+<div class="box key" style="margin-top:14px">A standard container is frozen by its contract. Faster designs (Swiss tables, F14) exist precisely because they <strong>promise less</strong>.</div>
 
-<!-- ====================== PART 3 ====================== -->
-<section class="slide divider">
-  <span class="kicker">Part 3 · 01:00–01:30</span>
-  <h1>Collisions, load, resizing,<br>deletion and layout</h1>
-</section>
-
-<section class="slide">
-  <h2>Two families of collision handling</h2>
-  <div class="cols">
-    <div>
-      <h3>Separate chaining</h3>
-      <svg viewBox="0 0 520 250">
-        <g font-size="15" font-family="Consolas,monospace">
-          <rect x="10" y="10" width="60" height="230" fill="#f5f6f8" stroke="#14304a"/>
-          <line x1="10" y1="56" x2="70" y2="56" stroke="#14304a"/><line x1="10" y1="102" x2="70" y2="102" stroke="#14304a"/><line x1="10" y1="148" x2="70" y2="148" stroke="#14304a"/><line x1="10" y1="194" x2="70" y2="194" stroke="#14304a"/>
-          <rect x="120" y="16" width="100" height="34" rx="5" fill="#e3f1f2" stroke="#0b6e75"/><text x="135" y="38">k1,v1</text>
-          <rect x="270" y="16" width="100" height="34" rx="5" fill="#e3f1f2" stroke="#0b6e75"/><text x="285" y="38">k7,v7</text>
-          <rect x="120" y="108" width="100" height="34" rx="5" fill="#e3f1f2" stroke="#0b6e75"/><text x="135" y="130">k3,v3</text>
-          <rect x="120" y="200" width="100" height="34" rx="5" fill="#e3f1f2" stroke="#0b6e75"/><text x="135" y="222">k4,v4</text>
-          <rect x="270" y="200" width="100" height="34" rx="5" fill="#e3f1f2" stroke="#0b6e75"/><text x="285" y="222">k9,v9</text>
-          <rect x="420" y="200" width="90" height="34" rx="5" fill="#e3f1f2" stroke="#0b6e75"/><text x="430" y="222">k2,v2</text>
-        </g>
-        <g stroke="#0b6e75" stroke-width="2"><line x1="55" y1="33" x2="120" y2="33"/><line x1="220" y1="33" x2="270" y2="33"/><line x1="55" y1="125" x2="120" y2="125"/><line x1="55" y1="217" x2="120" y2="217"/><line x1="220" y1="217" x2="270" y2="217"/><line x1="370" y1="217" x2="420" y2="217"/></g>
-      </svg>
-      <p class="xsmall">Each node a separate allocation. Load α may exceed 1. Stable addresses.</p>
-    </div>
-    <div>
-      <h3>Open addressing (linear probing)</h3>
-      <svg viewBox="0 0 520 250">
-        <g font-size="15" font-family="Consolas,monospace">
-          <rect x="10" y="90" width="62" height="60" fill="#e3f1f2" stroke="#0b6e75"/><text x="18" y="125">k1</text>
-          <rect x="72" y="90" width="62" height="60" fill="#e3f1f2" stroke="#0b6e75"/><text x="80" y="125">k7</text>
-          <rect x="134" y="90" width="62" height="60" fill="#fde2e2" stroke="#a3262a"/><text x="146" y="125">✝</text>
-          <rect x="196" y="90" width="62" height="60" fill="#e3f1f2" stroke="#0b6e75"/><text x="204" y="125">k3</text>
-          <rect x="258" y="90" width="62" height="60" fill="#fff" stroke="#14304a"/>
-          <rect x="320" y="90" width="62" height="60" fill="#e3f1f2" stroke="#0b6e75"/><text x="328" y="125">k4</text>
-          <rect x="382" y="90" width="62" height="60" fill="#e3f1f2" stroke="#0b6e75"/><text x="390" y="125">k9</text>
-          <rect x="444" y="90" width="62" height="60" fill="#fff" stroke="#14304a"/>
-        </g>
-        <path d="M41,80 C80,40 180,40 222,80" fill="none" stroke="#a3262a" stroke-width="2" stroke-dasharray="5 4"/>
-        <text x="60" y="36" font-size="15" fill="#a3262a">probe for k3: skip k1, k7, tombstone</text>
-        <text x="10" y="190" font-size="15" fill="#46505e">One contiguous array. Collisions use neighbouring slots.</text>
-        <text x="10" y="214" font-size="15" fill="#46505e">✝ = tombstone (deleted, but keeps the chain intact)</text>
-      </svg>
-      <p class="xsmall">No per-entry allocation, cache-friendly. α must stay &lt; 1. Moves on rehash.</p>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:00</span></p>
-    <h4>Say</h4>
-    <p>"Everyone knows both from undergrad. The question for us is: what does each cost in memory, in cache misses, and in contract?"</p>
-    <h4>Comparison to draw out</h4>
-    <ul>
-      <li><strong>Chaining</strong>: lookup = bucket array load + one or more node loads (each a likely cache miss for large tables). Memory per entry: node (next 8 + key + value + optionally cached hash 8) + allocator header (~16) + bucket pointer 8. Degrades gracefully as α grows.</li>
-      <li><strong>Linear probing</strong>: lookup = usually one cache line holds several slots, so probing a few more slots is nearly free. Memory: slot size × capacity; at α = 0.5 you pay for 2× slots. Degrades sharply near α → 1 (next slide).</li>
-      <li>Other open-addressing schemes: quadratic probing, double hashing, Robin Hood (reduces variance of probe lengths), cuckoo hashing (worst-case O(1) lookup, complex insertion), Swiss tables (groups of 16 slots with 1-byte metadata scanned by SIMD).</li>
-    </ul>
-  </aside>
-</section>
-
-<section class="slide">
-  <h2>Load factor: where the cliff is</h2>
-  <div class="cols wide-r">
-    <div class="small">
-      <p>Expected probes, linear probing (Knuth):</p>
-      <p class="xsmall">hit ≈ ½ (1 + 1/(1−α))<br>miss ≈ ½ (1 + 1/(1−α)²)</p>
-      <p class="xsmall muted">Chaining: hit ≈ 1 + α/2, miss ≈ α</p>
-    </div>
-    <table>
-      <tr><th class="num">α</th><th class="num">hit probes</th><th class="num">miss probes</th></tr>
-      <tr><td class="num">0.50</td><td class="num">1.5</td><td class="num">2.5</td></tr>
-      <tr><td class="num">0.75</td><td class="num">2.5</td><td class="num">8.5</td></tr>
-      <tr><td class="num">0.90</td><td class="num">5.5</td><td class="num">50.5</td></tr>
-      <tr class="hl"><td class="num">0.99</td><td class="num">50.5</td><td class="num">5000.5</td></tr>
-    </table>
-  </div>
-  <div class="box warn small">Misses degrade quadratically in 1/(1−α). Workloads dominated by misses (dedup of new IDs, negative caches) feel the cliff first.</div>
-  <aside class="notes">
-    <p><span class="t">01:06</span></p>
-    <h4>Connect to workload</h4>
-    <p>Lecture 1's dedup component: 99% of lookups are <em>misses</em> (new IDs). A max load of 0.9 would look fine in a benchmark of hits and be terrible in production. The operation mix determines which column matters.</p>
-    <h4>Memory vs speed trade</h4>
-    <p>α = 0.5 → 2× memory of α = 1 in slot storage. Many production maps run 0.5–0.875 (Swiss tables allow 7/8 because SIMD scanning makes long probes cheap). Picking α is picking a point on a memory/latency curve — it should be justified by the workload.</p>
-    <h4>Caveat</h4>
-    <p>Formulas assume uniform hashing. With a weak hash the effective α within a cluster is ~1 regardless of the global α — the incident.</p>
-  </aside>
-</section>
-
-<section class="slide">
-  <h2>Resizing: amortised cheap, individually expensive</h2>
-  <div class="cols small">
-    <div>
-      <ul>
-        <li>Doubling gives amortised O(1) insert — total work ≤ 2n moves</li>
-        <li>But the insert that triggers it pays O(n): at 16M entries that is <strong>hundreds of milliseconds</strong></li>
-        <li>Rehash also doubles memory temporarily (old + new arrays)</li>
-        <li>Open addressing: rehash <strong>moves</strong> every element → all pointers invalidated</li>
-      </ul>
-    </div>
-    <div>
-      <h3>Mitigations</h3>
-      <ul>
-        <li><code>reserve(n)</code> when n is known</li>
-        <li>Incremental rehash: migrate a few buckets per operation (Redis dict)</li>
-        <li>Shard into many small tables (bounded pause per shard)</li>
-        <li>Never shrink automatically, or shrink with hysteresis</li>
-      </ul>
-    </div>
-  </div>
-  <div class="box q small"><span class="label">Ask</span>Why is "grow at 0.75, shrink at 0.25" better than "grow at 0.75, shrink at 0.70"?</div>
-  <aside class="notes">
-    <p><span class="t">01:12</span></p>
-    <h4>Answer</h4>
-    <p>Thrashing. With close thresholds, a workload oscillating around the boundary (insert one, erase one) triggers a full O(n) rehash on every operation. A wide gap (hysteresis) guarantees Θ(n) cheap operations between resizes, preserving the amortised bound.</p>
-    <h4>Redis detail (if asked)</h4>
-    <p>Redis dictionaries keep two tables during rehash; each lookup/insert migrates one bucket (plus a time-bounded background step); lookups check both tables. Latency stays bounded at the cost of complexity and 2× memory during migration.</p>
-    <h4>Memory spike</h4>
-    <p>The temporary 2× is often what gets containers OOM-killed: a pod at 60% memory grows its main table and dies. The memory budget must include the rehash peak.</p>
-  </aside>
-</section>
-
-<section class="slide">
-  <h2>Deletion in open addressing</h2>
-  <div class="cols small">
-    <div class="card">
-      <h3>Just mark slot empty?</h3>
-      <p>Breaks probe chains: keys inserted after a collision become unreachable. <span class="tag bad">wrong answers</span></p>
-    </div>
-    <div class="card">
-      <h3>Tombstones</h3>
-      <p>Mark "deleted": lookups skip it, inserts may reuse it. Accumulate under churn → must count toward load and be purged. <span class="tag warn">subtle</span></p>
-    </div>
-  </div>
-  <div class="card small" style="margin-top:16px">
-    <h3>Backward-shift deletion (linear probing only)</h3>
-    <p>After removing a slot, shift later entries of the cluster back into the gap. No tombstones, but erase costs a cluster scan and moves elements (invalidating pointers).</p>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:17</span></p>
-    <h4>Say</h4>
-    <p>"Deletion is where most hand-written open-addressing maps are broken. The lab after the break contains a map that uses tombstones — and still has two deletion-related bugs. Keep this slide in mind."</p>
-    <h4>Tombstone subtleties (don't give away the lab — just state principles)</h4>
-    <ul>
-      <li>A lookup stops only at an <em>empty</em> slot, never at a tombstone.</li>
-      <li>Inserting into a tombstone is safe only when you know the key is not further along the chain.</li>
-      <li>Load factor must include tombstones, otherwise the table can run out of empty slots.</li>
-    </ul>
-    <h4>Workload link</h4>
-    <p>Churn-heavy workloads (sessions, caches, dedup windows — Lecture 1's <code>RecentWindow</code>!) generate a delete for every insert. Tombstone policy is a first-order design decision for them.</p>
-  </aside>
-</section>
-
-<section class="slide">
-  <h2>Iteration, stability and invalidation</h2>
-  <table class="small">
-    <tr><th>Question users will ask</th><th><code>std::unordered_map</code></th><th>Flat open-addressing map</th></tr>
-    <tr><td>Pointer to a value after another insert?</td><td>Valid</td><td>Invalid if rehash</td></tr>
-    <tr><td>Iterator after insert?</td><td>Invalid if rehash</td><td>Invalid if rehash</td></tr>
-    <tr><td>Erase while iterating?</td><td><code>it = m.erase(it)</code></td><td>Depends: backward-shift breaks it</td></tr>
-    <tr><td>Iteration order?</td><td>Unspecified, changes on rehash</td><td>Unspecified, may be randomised</td></tr>
-    <tr><td>Iteration cost?</td><td>O(n + buckets)</td><td>O(capacity) — even when nearly empty</td></tr>
-  </table>
-  <div class="box warn small" style="margin-top:14px">If you do not specify iteration order, users will depend on it anyway. Abseil randomises it in debug builds to break such tests early.</div>
-  <aside class="notes">
-    <p><span class="t">01:22</span></p>
-    <h4>Classic bugs</h4>
-    <ul>
-      <li>Holding <code>auto&amp; v = m[k1];</code> then <code>m[k2] = ...;</code> then using <code>v</code>: fine with std::unordered_map, dangling with a flat map. Migrating a codebase from one to the other silently introduces use-after-free. ASan catches it.</li>
-      <li>Tests that compare printed map contents in order: pass today, fail after a library upgrade changes the hash seed or growth policy.</li>
-      <li>O(capacity) iteration: a map that once held 10M entries and now holds 10 still iterates 16M slots if it never shrinks — "clear() is fast, iteration is slow" surprises.</li>
-    </ul>
-    <h4>Design advice for projects</h4>
-    <p>If deterministic output is a requirement (reports, reproducible tests), sort on output or use an ordered structure; do not rely on hash order.</p>
-  </aside>
-</section>
-
-<section class="slide">
-  <h2>Memory layout: bytes and cache lines per entry</h2>
-  <table class="small">
-    <tr><th>Map from <code>uint64</code> → <code>uint64</code></th><th class="num">≈ bytes / entry</th><th>Cache misses per lookup (large table)</th></tr>
-    <tr><td><code>std::unordered_map</code> (node + bucket + malloc header)</td><td class="num">40–56</td><td>2+ (bucket, node, chain)</td></tr>
-    <tr><td>Linear probing, 16 B slots + state, α ≈ 0.5–0.75</td><td class="num">32–48</td><td>≈ 1</td></tr>
-    <tr><td>Swiss table (1 control byte + 16 B slot), α ≤ 7/8</td><td class="num">≈ 20–34</td><td>≈ 1–2 (control, slot)</td></tr>
-    <tr><td>Sorted vector of pairs + binary search</td><td class="num">16</td><td>≈ log₂ n / 4</td></tr>
-  </table>
-  <p class="small" style="margin-top:12px">At 10⁸ entries, 56 vs 24 bytes is 5.6 GB vs 2.4 GB. Memory is usually the binding constraint before CPU.</p>
-  <aside class="notes">
-    <p><span class="t">01:26</span></p>
-    <h4>Explain the rows</h4>
-    <ul>
-      <li>Node: next 8 + key 8 + value 8 (+ cached hash 8 for some key types) = 24–32 B, malloc rounds up and adds ~8–16 B header → 32–48 B; plus 8 B bucket pointer at α≈1.</li>
-      <li>Our lab slot: 1-byte state padded to 8 + key 8 + value 8 = 24 B; at α 0.5–0.75 → 32–48 B per live entry. Storing the state bytes separately (as Swiss tables do) removes padding.</li>
-      <li>Sorted vector: no overhead at all, but O(n) insert. For read-mostly data (built once, queried often) it is often the fastest and smallest — a recurring alternative in Lectures 4 and 6.</li>
-    </ul>
-    <h4>Transition</h4>
-    <p>"After the break: a map that looks correct, passes its tests, and beats <code>std::unordered_map</code> in a benchmark. Your job is to show it is broken."</p>
-  </aside>
 </section>
 
 <section class="slide divider">
-  <span class="kicker">01:30–01:40</span>
-  <h1>Break — 10 minutes</h1>
-  <p>Download <code>Lecture_02/Student_Resources/</code> from Classroom · Hand in team registration forms</p>
+<span class="kicker">Part 3 · 01:00–01:30</span>
+<h1>Collisions, load, resizing,<br/>deletion and layout</h1>
 </section>
-
-<!-- ====================== PART 4 ====================== -->
-<section class="slide divider">
-  <span class="kicker">Part 4 · 01:40–02:20</span>
-  <h1>Lab: debugging a flawed<br>open-addressing map</h1>
-</section>
-
 <section class="slide">
-  <h2>Lab brief (pairs, 30 minutes)</h2>
-  <div class="cols wide-l small">
-    <div>
-      <p><code>flawed_hash_map.hpp</code>: linear probing, tombstones, max load 0.75. Its author says: <em>"passes all tests and is 2× faster than std::unordered_map."</em></p>
-      <ol>
-        <li>Build and run <code>hash_map_test.cpp</code>. The smoke test passes. Does the differential test?</li>
-        <li>From the failing seed/step, find the <strong>correctness</strong> defect. Write a 5-line test that reproduces it.</li>
-        <li>Run <code>hash_map_bench.cpp</code>. Find <strong>two performance</strong> defects. Explain each with a mechanism, not a guess.</li>
-        <li>Propose fixes. State the invariant each fix restores.</li>
-      </ol>
-    </div>
-    <div class="box plain xsmall">
-      <span class="label">Build</span>
-      <code>g++ -std=c++20 -O1 -g hash_map_test.cpp -o t</code><br>
-      <code>g++ -std=c++20 -O2 hash_map_bench.cpp -o b</code><br><br>
-      <span class="label">Rules</span>
+<h2>Two families of collision handling</h2>
+<div class="cols">
+<div>
+<h3>Separate chaining</h3>
+<svg viewbox="0 0 520 250">
+<g font-family="Consolas,monospace" font-size="15">
+<rect fill="#f5f6f8" height="230" stroke="#14304a" width="60" x="10" y="10"></rect>
+<line stroke="#14304a" x1="10" x2="70" y1="56" y2="56"></line><line stroke="#14304a" x1="10" x2="70" y1="102" y2="102"></line><line stroke="#14304a" x1="10" x2="70" y1="148" y2="148"></line><line stroke="#14304a" x1="10" x2="70" y1="194" y2="194"></line>
+<rect fill="#e3f1f2" height="34" rx="5" stroke="#0b6e75" width="100" x="120" y="16"></rect><text x="135" y="38">k1,v1</text>
+<rect fill="#e3f1f2" height="34" rx="5" stroke="#0b6e75" width="100" x="270" y="16"></rect><text x="285" y="38">k7,v7</text>
+<rect fill="#e3f1f2" height="34" rx="5" stroke="#0b6e75" width="100" x="120" y="108"></rect><text x="135" y="130">k3,v3</text>
+<rect fill="#e3f1f2" height="34" rx="5" stroke="#0b6e75" width="100" x="120" y="200"></rect><text x="135" y="222">k4,v4</text>
+<rect fill="#e3f1f2" height="34" rx="5" stroke="#0b6e75" width="100" x="270" y="200"></rect><text x="285" y="222">k9,v9</text>
+<rect fill="#e3f1f2" height="34" rx="5" stroke="#0b6e75" width="90" x="420" y="200"></rect><text x="430" y="222">k2,v2</text>
+</g>
+<g stroke="#0b6e75" stroke-width="2"><line x1="55" x2="120" y1="33" y2="33"></line><line x1="220" x2="270" y1="33" y2="33"></line><line x1="55" x2="120" y1="125" y2="125"></line><line x1="55" x2="120" y1="217" y2="217"></line><line x1="220" x2="270" y1="217" y2="217"></line><line x1="370" x2="420" y1="217" y2="217"></line></g>
+</svg>
+<p class="xsmall">Each node a separate allocation. Load α may exceed 1. Stable addresses.</p>
+</div>
+<div>
+<h3>Open addressing (linear probing)</h3>
+<svg viewbox="0 0 520 250">
+<g font-family="Consolas,monospace" font-size="15">
+<rect fill="#e3f1f2" height="60" stroke="#0b6e75" width="62" x="10" y="90"></rect><text x="18" y="125">k1</text>
+<rect fill="#e3f1f2" height="60" stroke="#0b6e75" width="62" x="72" y="90"></rect><text x="80" y="125">k7</text>
+<rect fill="#fde2e2" height="60" stroke="#a3262a" width="62" x="134" y="90"></rect><text x="146" y="125">✝</text>
+<rect fill="#e3f1f2" height="60" stroke="#0b6e75" width="62" x="196" y="90"></rect><text x="204" y="125">k3</text>
+<rect fill="#fff" height="60" stroke="#14304a" width="62" x="258" y="90"></rect>
+<rect fill="#e3f1f2" height="60" stroke="#0b6e75" width="62" x="320" y="90"></rect><text x="328" y="125">k4</text>
+<rect fill="#e3f1f2" height="60" stroke="#0b6e75" width="62" x="382" y="90"></rect><text x="390" y="125">k9</text>
+<rect fill="#fff" height="60" stroke="#14304a" width="62" x="444" y="90"></rect>
+</g>
+<path d="M41,80 C80,40 180,40 222,80" fill="none" stroke="#a3262a" stroke-dasharray="5 4" stroke-width="2"></path>
+<text fill="#a3262a" font-size="15" x="60" y="36">probe for k3: skip k1, k7, tombstone</text>
+<text fill="#46505e" font-size="15" x="10" y="190">One contiguous array. Collisions use neighbouring slots.</text>
+<text fill="#46505e" font-size="15" x="10" y="214">✝ = tombstone (deleted, but keeps the chain intact)</text>
+</svg>
+<p class="xsmall">No per-entry allocation, cache-friendly. α must stay &lt; 1. Moves on rehash.</p>
+</div>
+</div>
+
+</section>
+<section class="slide">
+<h2>Load factor: where the cliff is</h2>
+<div class="cols wide-r">
+<div class="small">
+<p>Expected probes, linear probing (Knuth):</p>
+<p class="xsmall">hit ≈ ½ (1 + 1/(1−α))<br/>miss ≈ ½ (1 + 1/(1−α)²)</p>
+<p class="xsmall muted">Chaining: hit ≈ 1 + α/2, miss ≈ α</p>
+</div>
+<table>
+<tr><th class="num">α</th><th class="num">hit probes</th><th class="num">miss probes</th></tr>
+<tr><td class="num">0.50</td><td class="num">1.5</td><td class="num">2.5</td></tr>
+<tr><td class="num">0.75</td><td class="num">2.5</td><td class="num">8.5</td></tr>
+<tr><td class="num">0.90</td><td class="num">5.5</td><td class="num">50.5</td></tr>
+<tr class="hl"><td class="num">0.99</td><td class="num">50.5</td><td class="num">5000.5</td></tr>
+</table>
+</div>
+<div class="box warn small">Misses degrade quadratically in 1/(1−α). Workloads dominated by misses (dedup of new IDs, negative caches) feel the cliff first.</div>
+
+</section>
+<section class="slide">
+<h2>Resizing: amortised cheap, individually expensive</h2>
+<div class="cols small">
+<div>
+<ul>
+<li>Doubling gives amortised O(1) insert — total work ≤ 2n moves</li>
+<li>But the insert that triggers it pays O(n): at 16M entries that is <strong>hundreds of milliseconds</strong></li>
+<li>Rehash also doubles memory temporarily (old + new arrays)</li>
+<li>Open addressing: rehash <strong>moves</strong> every element → all pointers invalidated</li>
+</ul>
+</div>
+<div>
+<h3>Mitigations</h3>
+<ul>
+<li><code>reserve(n)</code> when n is known</li>
+<li>Incremental rehash: migrate a few buckets per operation (Redis dict)</li>
+<li>Shard into many small tables (bounded pause per shard)</li>
+<li>Never shrink automatically, or shrink with hysteresis</li>
+</ul>
+</div>
+</div>
+<div class="box q small"><span class="label">Ask</span>Why is "grow at 0.75, shrink at 0.25" better than "grow at 0.75, shrink at 0.70"?</div>
+
+</section>
+<section class="slide">
+<h2>Deletion in open addressing</h2>
+<div class="cols small">
+<div class="card">
+<h3>Just mark slot empty?</h3>
+<p>Breaks probe chains: keys inserted after a collision become unreachable. <span class="tag bad">wrong answers</span></p>
+</div>
+<div class="card">
+<h3>Tombstones</h3>
+<p>Mark "deleted": lookups skip it, inserts may reuse it. Accumulate under churn → must count toward load and be purged. <span class="tag warn">subtle</span></p>
+</div>
+</div>
+<div class="card small" style="margin-top:16px">
+<h3>Backward-shift deletion (linear probing only)</h3>
+<p>After removing a slot, shift later entries of the cluster back into the gap. No tombstones, but erase costs a cluster scan and moves elements (invalidating pointers).</p>
+</div>
+
+</section>
+<section class="slide">
+<h2>Iteration, stability and invalidation</h2>
+<table class="small">
+<tr><th>Question users will ask</th><th><code>std::unordered_map</code></th><th>Flat open-addressing map</th></tr>
+<tr><td>Pointer to a value after another insert?</td><td>Valid</td><td>Invalid if rehash</td></tr>
+<tr><td>Iterator after insert?</td><td>Invalid if rehash</td><td>Invalid if rehash</td></tr>
+<tr><td>Erase while iterating?</td><td><code>it = m.erase(it)</code></td><td>Depends: backward-shift breaks it</td></tr>
+<tr><td>Iteration order?</td><td>Unspecified, changes on rehash</td><td>Unspecified, may be randomised</td></tr>
+<tr><td>Iteration cost?</td><td>O(n + buckets)</td><td>O(capacity) — even when nearly empty</td></tr>
+</table>
+<div class="box warn small" style="margin-top:14px">If you do not specify iteration order, users will depend on it anyway. Abseil randomises it in debug builds to break such tests early.</div>
+
+</section>
+<section class="slide">
+<h2>Memory layout: bytes and cache lines per entry</h2>
+<table class="small">
+<tr><th>Map from <code>uint64</code> → <code>uint64</code></th><th class="num">≈ bytes / entry</th><th>Cache misses per lookup (large table)</th></tr>
+<tr><td><code>std::unordered_map</code> (node + bucket + malloc header)</td><td class="num">40–56</td><td>2+ (bucket, node, chain)</td></tr>
+<tr><td>Linear probing, 16 B slots + state, α ≈ 0.5–0.75</td><td class="num">32–48</td><td>≈ 1</td></tr>
+<tr><td>Swiss table (1 control byte + 16 B slot), α ≤ 7/8</td><td class="num">≈ 20–34</td><td>≈ 1–2 (control, slot)</td></tr>
+<tr><td>Sorted vector of pairs + binary search</td><td class="num">16</td><td>≈ log₂ n / 4</td></tr>
+</table>
+<p class="small" style="margin-top:12px">At 10⁸ entries, 56 vs 24 bytes is 5.6 GB vs 2.4 GB. Memory is usually the binding constraint before CPU.</p>
+
+</section>
+<section class="slide divider">
+<span class="kicker">01:30–01:40</span>
+<h1>Break — 10 minutes</h1>
+<p>Download <code>Lecture_02/Student_Resources/</code> from Classroom · Hand in team registration forms</p>
+</section>
+
+<section class="slide divider">
+<span class="kicker">Part 4 · 01:40–02:20</span>
+<h1>Lab: debugging a flawed<br/>open-addressing map</h1>
+</section>
+<section class="slide">
+<h2>Lab brief (pairs, 30 minutes)</h2>
+<div class="cols wide-l small">
+<div>
+<p><code>flawed_hash_map.hpp</code>: linear probing, tombstones, max load 0.75. Its author says: <em>"passes all tests and is 2× faster than std::unordered_map."</em></p>
+<ol>
+<li>Build and run <code>hash_map_test.cpp</code>. The smoke test passes. Does the differential test?</li>
+<li>From the failing seed/step, find the <strong>correctness</strong> defect. Write a 5-line test that reproduces it.</li>
+<li>Run <code>hash_map_bench.cpp</code>. Find <strong>two performance</strong> defects. Explain each with a mechanism, not a guess.</li>
+<li>Propose fixes. State the invariant each fix restores.</li>
+</ol>
+</div>
+<div class="box plain xsmall">
+<span class="label">Build</span>
+<code>g++ -std=c++20 -O1 -g hash_map_test.cpp -o t</code><br/>
+<code>g++ -std=c++20 -O2 hash_map_bench.cpp -o b</code><br/><br/>
+<span class="label">Rules</span>
       Find defects with tests and measurements. "I think line 40 looks wrong" is not a finding until a test fails.
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:40</span> Circulate. Most pairs will find D1 within 15 min, D3 within 25; D2 is hardest.</p>
-    <h4>The three defects (INSTRUCTOR ONLY)</h4>
-    <ol>
-      <li><strong>D1 — duplicate keys via tombstone reuse (correctness).</strong> <code>insert_or_assign</code> writes into the first <code>Tomb</code> it meets, without checking whether the key already exists further along the probe chain. Sequence: keys a, b collide (b placed after a); erase a (tombstone); insert b again → goes into a's tombstone → two live copies of b, <code>size()</code> too large; erase b removes one copy, <code>contains(b)</code> still true.</li>
-      <li><strong>D2 — tombstones ignored in load factor (performance, eventually liveness).</strong> Growth checks <code>size_</code> only. Under churn (erase + insert of fresh keys), tombstones accumulate until there are no <code>Empty</code> slots left; every miss then scans the whole table (bounded only by the loop counter). Benchmark: <code>lookup_miss_after_churn</code> ~22,000 ns vs ~20 ns.</li>
-      <li><strong>D3 — identity hash + mask (performance).</strong> <code>std::hash&lt;uint64_t&gt;</code> is identity; <code>&amp; mask</code> uses only low bits; strided keys cluster. Benchmark: <code>lookup_strided_keys</code> ~840 ns vs ~8 ns.</li>
-    </ol>
-    <h4>Hints to give progressively (only if stuck)</h4>
-    <ol>
-      <li>"Print the map's size and the reference size at the mismatch. Which is larger?"</li>
-      <li>"Which operations ran just before on keys that share a slot?"</li>
-      <li>"For the benchmark: which workloads are slow? What is special about their keys / history?"</li>
-      <li>"How many <code>Empty</code> slots are left after churn? Add a counter."</li>
-    </ol>
-  </aside>
-</section>
+</div>
 
+</section>
 <section class="slide">
-  <h2>The insert path — read it with tombstones in mind</h2>
-  <pre class="sm"><code>bool insert_or_assign(const K&amp; k, const V&amp; v) {
+<h2>The insert path — read it with tombstones in mind</h2>
+<pre class="sm"><code>bool insert_or_assign(const K&amp; k, const V&amp; v) {
     if ((size_ + 1) * 4 &gt; slots_.size() * 3) grow();       // max load 0.75
     std::size_t i = index(k);                               // Hash{}(k) &amp; mask()
     for (;;) {
@@ -555,229 +370,156 @@ auto it = users.find({"ali@example.com"});   // ?</code></pre>
         i = (i + 1) &amp; mask();
     }
 }</code></pre>
-  <p class="small muted">Use this slide during the debrief — not as a shortcut during the lab.</p>
-  <aside class="notes">
-    <p><span class="t">02:05</span> Show this slide when you start the debrief (around 02:05), not before.</p>
-    <h4>Walk the class through each line</h4>
-    <ul>
-      <li>Line 2: counts <code>size_</code> only → D2.</li>
-      <li>Line 3: identity hash, mask → D3.</li>
-      <li>Line 6: treats Tomb like Empty → D1. The fix: remember the first tombstone, keep probing until an Empty slot proves the key is absent, then insert at the remembered tombstone (reuse is good for chain length) — see the instructor solution.</li>
-    </ul>
-    <h4>Also point out</h4>
-    <p><code>find</code> correctly skips tombstones and stops at Empty — so the author understood tombstones in the read path and not in the write path. That is realistic: bugs cluster where two invariants interact.</p>
-  </aside>
-</section>
+<p class="small muted">Use this slide during the debrief — not as a shortcut during the lab.</p>
 
+</section>
 <section class="slide">
-  <h2>Debrief: evidence for each defect</h2>
-  <table class="small">
-    <tr><th>Defect</th><th>Found by</th><th>Evidence</th><th>Invariant restored</th></tr>
-    <tr><td>D1 Tombstone reuse creates duplicates</td><td>Differential test, small key space</td><td><code>size=8 ref=7</code> at seed 1, step 34</td><td>Each key occupies ≤ 1 Full slot</td></tr>
-    <tr><td>D2 Tombstones not counted in load</td><td>Benchmark: churn then miss</td><td>22,489 ns vs 20 ns per miss</td><td>(Full + Tomb) / capacity ≤ 0.75</td></tr>
-    <tr><td>D3 Identity hash + mask</td><td>Benchmark: strided keys</td><td>838 ns vs 8 ns per lookup</td><td>(Performance) index uses mixed bits</td></tr>
-  </table>
-  <div class="box key small" style="margin-top:14px">The smoke test passed with every defect present. Two of the three defects are <strong>invisible to any functional test</strong>: only a workload-aware benchmark finds them.</div>
-  <aside class="notes">
-    <p><span class="t">02:10</span></p>
-    <h4>Ask each defect's finders</h4>
-    <p>"How did you know?" Reward mechanism-level explanations ("no Empty slots left, so misses scan the table") over symptom-level ones ("it's slow").</p>
-    <h4>Why the smoke test passed</h4>
-    <p>It inserted 1000 sequential ints into a growing table (no collisions of the D1 kind: no erase-then-reinsert of a colliding key), erased half, checked membership. No churn, no strided keys. <strong>Tests encode the author's assumptions</strong> — the same assumptions that produced the bugs.</p>
-    <h4>Invariant check</h4>
-    <p>The fixed version has <code>check_invariants()</code> verifying counts of Full/Tomb slots and the load bound. Calling it after every step of the differential test would have caught D1 and D2 immediately (D2 as a violated load invariant rather than as slowness). Invariants turn performance bugs into correctness failures — a powerful technique.</p>
-  </aside>
+<h2>Debrief: evidence for each defect</h2>
+<table class="small">
+<tr><th>Defect</th><th>Found by</th><th>Evidence</th><th>Invariant restored</th></tr>
+<tr><td>D1 Tombstone reuse creates duplicates</td><td>Differential test, small key space</td><td><code>size=8 ref=7</code> at seed 1, step 34</td><td>Each key occupies ≤ 1 Full slot</td></tr>
+<tr><td>D2 Tombstones not counted in load</td><td>Benchmark: churn then miss</td><td>22,489 ns vs 20 ns per miss</td><td>(Full + Tomb) / capacity ≤ 0.75</td></tr>
+<tr><td>D3 Identity hash + mask</td><td>Benchmark: strided keys</td><td>838 ns vs 8 ns per lookup</td><td>(Performance) index uses mixed bits</td></tr>
+</table>
+<div class="box key small" style="margin-top:14px">The smoke test passed with every defect present. Two of the three defects are <strong>invisible to any functional test</strong>: only a workload-aware benchmark finds them.</div>
+
 </section>
 
-<!-- ====================== PART 5 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 5 · 02:20–02:45</span>
-  <h1>Test and benchmark strategy<br>for a production map</h1>
+<span class="kicker">Part 5 · 02:20–02:45</span>
+<h1>Test and benchmark strategy<br/>for a production map</h1>
 </section>
-
 <section class="slide">
-  <h2>"2× faster than std::unordered_map" — true?</h2>
-  <table class="small">
-    <tr><th>Workload (65,536 keys, ns/op)</th><th class="num">std::unordered_map</th><th class="num">Flawed FlatMap</th><th class="num">Fixed FlatMap</th></tr>
-    <tr><td>Insert, random keys</td><td class="num">94</td><td class="num">45</td><td class="num">50</td></tr>
-    <tr><td>Lookup hit, random keys</td><td class="num">12</td><td class="num">6</td><td class="num">8</td></tr>
-    <tr><td>Lookup miss, random keys</td><td class="num">18</td><td class="num">13</td><td class="num">15</td></tr>
-    <tr class="hl"><td>Lookup, strided keys</td><td class="num">3</td><td class="num">838</td><td class="num">8</td></tr>
-    <tr class="hl"><td>Miss after churn</td><td class="num">21</td><td class="num">22,489</td><td class="num">20</td></tr>
-  </table>
-  <p class="xsmall muted">Median of 5 runs, MinGW g++ 15 -O2, one laptop. <code>Student_Resources/hash_map_bench.cpp</code>.</p>
-  <div class="box warn small">The claim was true for the benchmark the author chose. Choosing the workloads <strong>is</strong> the experiment.</div>
-  <aside class="notes">
-    <p><span class="t">02:20</span></p>
-    <h4>Say</h4>
-    <p>"The first three rows are what a typical student benchmark looks like — and on those rows the broken map wins. A benchmark suite must include the workloads that stress the design's assumptions: key distributions, churn, misses, and sizes beyond cache."</p>
-    <h4>Also notice</h4>
-    <ul>
-      <li>The fixed map is slightly slower than the flawed one on random keys (mixing costs ~2 ns; periodic tombstone purges cost some inserts). Correctness and robustness have a price; state it.</li>
-      <li>std::unordered_map wins on strided keys — for this workload the standard container is the right choice. There is no universally best map.</li>
-    </ul>
-    <h4>What this table still does not show</h4>
-    <p>Tail latency (rehash pauses), memory, string keys, larger-than-cache sizes (65k × 24 B ≈ 1.5 MB fits in L2/L3!), other compilers/CPUs. Ask the class to name them before you do.</p>
-  </aside>
-</section>
+<h2>"2× faster than std::unordered_map" — true?</h2>
+<table class="small">
+<tr><th>Workload (65,536 keys, ns/op)</th><th class="num">std::unordered_map</th><th class="num">Flawed FlatMap</th><th class="num">Fixed FlatMap</th></tr>
+<tr><td>Insert, random keys</td><td class="num">94</td><td class="num">45</td><td class="num">50</td></tr>
+<tr><td>Lookup hit, random keys</td><td class="num">12</td><td class="num">6</td><td class="num">8</td></tr>
+<tr><td>Lookup miss, random keys</td><td class="num">18</td><td class="num">13</td><td class="num">15</td></tr>
+<tr class="hl"><td>Lookup, strided keys</td><td class="num">3</td><td class="num">838</td><td class="num">8</td></tr>
+<tr class="hl"><td>Miss after churn</td><td class="num">21</td><td class="num">22,489</td><td class="num">20</td></tr>
+</table>
+<p class="xsmall muted">Median of 5 runs, MinGW g++ 15 -O2, one laptop. <code>Student_Resources/hash_map_bench.cpp</code>.</p>
+<div class="box warn small">The claim was true for the benchmark the author chose. Choosing the workloads <strong>is</strong> the experiment.</div>
 
+</section>
 <section class="slide">
-  <h2>A benchmark plan for a hash map</h2>
-  <div class="cols small">
-    <div>
-      <h3>Independent variables</h3>
-      <ul>
-        <li>n: in L1, L2, L3, and ≫ LLC (e.g. 10³ … 10⁸)</li>
-        <li>Load factor at measurement time</li>
-        <li>Key type/size: int, 16 B ID, 40 B string</li>
-        <li>Distribution: random, sequential, strided, skewed</li>
-        <li>Mix: hit/miss ratio, insert/erase churn</li>
-      </ul>
-    </div>
-    <div>
-      <h3>Metrics</h3>
-      <ul>
-        <li>ns/op median + spread; p99 and max for inserts (rehash)</li>
-        <li>Bytes per entry (allocator stats or RSS delta)</li>
-        <li>Probe length / chain length histogram</li>
-      </ul>
-      <h3>Baselines</h3>
-      <ul><li><code>std::unordered_map</code> with <code>reserve</code>, and without</li><li>Sorted vector if data is read-mostly</li></ul>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">02:27</span></p>
-    <h4>Details worth teaching</h4>
-    <ul>
-      <li><strong>Sizes across cache levels</strong>: performance steps when the working set leaves L2 (~1–2 MB) and LLC (~10–50 MB). A benchmark only at 65k keys measures cache-resident behavior.</li>
-      <li><strong>Random lookup order</strong>: iterating keys in insertion order can accidentally be cache-friendly (sequential keys with identity hash!). Shuffle the lookup sequence.</li>
-      <li><strong>Measuring rehash pauses</strong>: time each insert individually (or in batches of 64) and report the max and p99.9 — the mean hides them completely.</li>
-      <li><strong>Memory</strong>: custom allocator counting bytes, or <code>mallinfo2</code>/<code>GetProcessMemoryInfo</code> deltas; divide by n.</li>
-      <li><strong>Fair baseline</strong>: give std::unordered_map the same <code>reserve</code> and the same (mixed) hash where relevant; otherwise you measure the hash, not the table.</li>
-    </ul>
-  </aside>
-</section>
+<h2>A benchmark plan for a hash map</h2>
+<div class="cols small">
+<div>
+<h3>Independent variables</h3>
+<ul>
+<li>n: in L1, L2, L3, and ≫ LLC (e.g. 10³ … 10⁸)</li>
+<li>Load factor at measurement time</li>
+<li>Key type/size: int, 16 B ID, 40 B string</li>
+<li>Distribution: random, sequential, strided, skewed</li>
+<li>Mix: hit/miss ratio, insert/erase churn</li>
+</ul>
+</div>
+<div>
+<h3>Metrics</h3>
+<ul>
+<li>ns/op median + spread; p99 and max for inserts (rehash)</li>
+<li>Bytes per entry (allocator stats or RSS delta)</li>
+<li>Probe length / chain length histogram</li>
+</ul>
+<h3>Baselines</h3>
+<ul><li><code>std::unordered_map</code> with <code>reserve</code>, and without</li><li>Sorted vector if data is read-mostly</li></ul>
+</div>
+</div>
 
+</section>
 <section class="slide">
-  <h2>A test strategy for a hash map</h2>
-  <table class="small">
-    <tr><th>Technique</th><th>Targets</th></tr>
-    <tr><td>Differential vs <code>std::unordered_map</code>, small key space, fixed seeds</td><td>Semantic divergence (D1)</td></tr>
-    <tr><td><code>check_invariants()</code> after each step</td><td>Silent corruption; load bound (D2)</td></tr>
-    <tr><td>Degenerate hash functor: <code>return 0;</code> and <code>return k &amp; 1;</code></td><td>Every collision, wrap-around, cluster path</td></tr>
-    <tr><td>Resize boundaries: n = capacity × 0.75 ± 1</td><td>Off-by-one in growth</td></tr>
-    <tr><td>Erase-reinsert of colliding keys; erase all then reinsert</td><td>Tombstone logic</td></tr>
-    <tr><td>ASan: hold pointer from <code>find</code>, insert until rehash, use it</td><td>Documents the invalidation contract</td></tr>
-    <tr><td>Performance regression test: probe length on strided keys</td><td>Hash quality (D3)</td></tr>
-  </table>
-  <aside class="notes">
-    <p><span class="t">02:35</span></p>
-    <h4>Degenerate hash functors</h4>
-    <p>Template the map on <code>Hash</code> precisely so tests can inject <code>struct Zero { size_t operator()(uint64_t) const { return 0; } };</code>. With everything in one cluster, every probe path, wrap-around at the end of the array, and tombstone interaction is exercised with a tiny test. This is "design for testability" from Lecture 1 applied again.</p>
-    <h4>Performance as a test</h4>
-    <p>Wall-clock tests are flaky. Instead assert on a deterministic proxy: average probe length for 10k strided keys &lt; 3. It fails deterministically when hash quality regresses.</p>
-    <h4>The ASan test</h4>
-    <p>This is a test that <em>should crash</em> under ASan for a flat map, documenting that pointers are invalidated. Keep it disabled by default or as a "death test" — its value is making the contract explicit.</p>
-  </aside>
+<h2>A test strategy for a hash map</h2>
+<table class="small">
+<tr><th>Technique</th><th>Targets</th></tr>
+<tr><td>Differential vs <code>std::unordered_map</code>, small key space, fixed seeds</td><td>Semantic divergence (D1)</td></tr>
+<tr><td><code>check_invariants()</code> after each step</td><td>Silent corruption; load bound (D2)</td></tr>
+<tr><td>Degenerate hash functor: <code>return 0;</code> and <code>return k &amp; 1;</code></td><td>Every collision, wrap-around, cluster path</td></tr>
+<tr><td>Resize boundaries: n = capacity × 0.75 ± 1</td><td>Off-by-one in growth</td></tr>
+<tr><td>Erase-reinsert of colliding keys; erase all then reinsert</td><td>Tombstone logic</td></tr>
+<tr><td>ASan: hold pointer from <code>find</code>, insert until rehash, use it</td><td>Documents the invalidation contract</td></tr>
+<tr><td>Performance regression test: probe length on strided keys</td><td>Hash quality (D3)</td></tr>
+</table>
+
 </section>
 
-<!-- ====================== PART 6 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 6 · 02:45–03:00</span>
-  <h1>API design and the project</h1>
+<span class="kicker">Part 6 · 02:45–03:00</span>
+<h1>API design and the project</h1>
 </section>
-
 <section class="slide">
-  <h2>API choices with consequences</h2>
-  <table class="small">
-    <tr><th>API</th><th>Hidden consequence</th></tr>
-    <tr><td><code>V&amp; operator[](const K&amp;)</code></td><td>A lookup of a missing key <strong>inserts</strong> it. Reads can grow the map, cannot be <code>const</code>.</td></tr>
-    <tr><td><code>V* find(const K&amp;)</code></td><td>Pointer lifetime must be documented (until next mutation)</td></tr>
-    <tr><td><code>std::optional&lt;V&gt; get(const K&amp;)</code></td><td>Safe, but copies V on every lookup</td></tr>
-    <tr><td><code>try_emplace</code> vs <code>insert_or_assign</code></td><td>"Keep old" vs "overwrite" — both are needed; name them</td></tr>
-    <tr><td>Heterogeneous lookup (<code>find(string_view)</code>)</td><td>Avoids building a <code>std::string</code> per query; requires hash/eq to agree across types</td></tr>
-  </table>
-  <aside class="notes">
-    <p><span class="t">02:45</span></p>
-    <h4>operator[] story</h4>
-    <p>A metrics service did <code>if (counters[name] &gt; limit)</code> for every incoming request name, including garbage names from scanners. Each read inserted a zero entry. Memory grew without bound until OOM. Classic. The fix is <code>find</code>; the lesson is that an API whose read path mutates is a footgun.</p>
-    <h4>Heterogeneous lookup</h4>
-    <p>C++20: <code>unordered_map</code> supports it with <code>is_transparent</code> hash and equality. The contract: <code>hash(string_view(s)) == hash(s)</code> for all s. That is rule 1 across types.</p>
-  </aside>
+<h2>API choices with consequences</h2>
+<table class="small">
+<tr><th>API</th><th>Hidden consequence</th></tr>
+<tr><td><code>V&amp; operator[](const K&amp;)</code></td><td>A lookup of a missing key <strong>inserts</strong> it. Reads can grow the map, cannot be <code>const</code>.</td></tr>
+<tr><td><code>V* find(const K&amp;)</code></td><td>Pointer lifetime must be documented (until next mutation)</td></tr>
+<tr><td><code>std::optional&lt;V&gt; get(const K&amp;)</code></td><td>Safe, but copies V on every lookup</td></tr>
+<tr><td><code>try_emplace</code> vs <code>insert_or_assign</code></td><td>"Keep old" vs "overwrite" — both are needed; name them</td></tr>
+<tr><td>Heterogeneous lookup (<code>find(string_view)</code>)</td><td>Avoids building a <code>std::string</code> per query; requires hash/eq to agree across types</td></tr>
+</table>
+
 </section>
-
 <section class="slide">
-  <h2>Project connection</h2>
-  <div class="cols small">
-    <div>
-      <p>Almost every project contains a hash map somewhere. In your design document (due 31 Oct) you should be able to state:</p>
-      <ul>
-        <li>Where keys come from — trusted or attacker-influenced?</li>
-        <li>Key distribution — and what happens if it changes</li>
-        <li>Operation mix — hit/miss ratio, churn</li>
-        <li>Load factor, growth policy, peak memory incl. rehash</li>
-        <li>Pointer/iterator lifetime your API exposes</li>
-        <li>Why the standard map is — or is not — good enough</li>
-      </ul>
-    </div>
-    <div class="box key">
-      <span class="label">Default advice</span>
+<h2>Project connection</h2>
+<div class="cols small">
+<div>
+<p>Almost every project contains a hash map somewhere. In your design document (due 31 Oct) you should be able to state:</p>
+<ul>
+<li>Where keys come from — trusted or attacker-influenced?</li>
+<li>Key distribution — and what happens if it changes</li>
+<li>Operation mix — hit/miss ratio, churn</li>
+<li>Load factor, growth policy, peak memory incl. rehash</li>
+<li>Pointer/iterator lifetime your API exposes</li>
+<li>Why the standard map is — or is not — good enough</li>
+</ul>
+</div>
+<div class="box key">
+<span class="label">Default advice</span>
       Start with <code>std::unordered_map</code> + <code>reserve</code>. Replace it only when a <strong>measurement</strong> on <strong>your workload</strong> shows it is the bottleneck — and keep it as your baseline.
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">02:50</span></p>
-    <p>Many teams will want to write their own hash map because it feels "advanced". Discourage it unless the project is specifically about the map. Writing one correctly is hard (today proved it); a project's marks come from the decision and the evidence, not from reinventing components.</p>
-  </aside>
-</section>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Milestones and next week</h2>
-  <div class="cols small">
-    <div>
-      <h3>Today — 03 Oct</h3>
-      <ul>
-        <li><strong>Team formation + preliminary topic</strong>: registration form handed in (names, IDs, repo URL, one-paragraph problem)</li>
-        <li>Unregistered students: stay 5 minutes to be grouped</li>
-      </ul>
-      <h3>Coming up</h3>
-      <ul>
-        <li>10 Oct — teams and topics should be settled</li>
-        <li><strong>17 Oct — project proposal due</strong> (template in <code>03_Project/templates/</code>)</li>
-      </ul>
-    </div>
-    <div>
-      <h3>Prepare for Lecture 3 — Caching</h3>
-      <ul>
-        <li>Finish the lab: fix D1–D3, make the differential test pass</li>
-        <li>Think of one cache in a system you have used: what is its eviction policy, and how would you know if it is a bad one?</li>
-      </ul>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">02:55</span></p>
-    <h4>Collect</h4>
-    <p>Registration forms. Record teams in the gradebook's Team ID column (<code>04_Grading/SE618_Master_Gradebook.xlsx</code>). Team IDs: T01, T02, …</p>
-    <h4>After class</h4>
-    <p>Upload <code>Instructor_Only/Lecture_02/fixed_hash_map.hpp</code> to Classroom as the solution (optional).</p>
-  </aside>
-</section>
+<h2>Milestones and next week</h2>
+<div class="cols small">
+<div>
+<h3>Today — 03 Oct</h3>
+<ul>
+<li><strong>Team formation + preliminary topic</strong>: registration form handed in (names, IDs, repo URL, one-paragraph problem)</li>
+<li>Unregistered students: stay 5 minutes to be grouped</li>
+</ul>
+<h3>Coming up</h3>
+<ul>
+<li>10 Oct — teams and topics should be settled</li>
+<li><strong>17 Oct — project proposal due</strong> (template in <code>03_Project/templates/</code>)</li>
+</ul>
+</div>
+<div>
+<h3>Prepare for Lecture 3 — Caching</h3>
+<ul>
+<li>Finish the lab: fix D1–D3, make the differential test pass</li>
+<li>Think of one cache in a system you have used: what is its eviction policy, and how would you know if it is a bad one?</li>
+</ul>
+</div>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Summary</h2>
-  <ol>
-    <li>Hash + index reduction are a matched pair; identity hash + mask fails on structured keys.</li>
-    <li>Rule 1: equal keys must hash equal. Normalise at the boundary.</li>
-    <li>Untrusted keys need a keyed hash or bounded input — the threat model is a requirement.</li>
-    <li>Load factor must count tombstones; misses feel the cliff first.</li>
-    <li>Amortised O(1) hides O(n) rehash pauses and 2× memory peaks.</li>
-    <li>Contracts (stability, iteration) constrain layout; flat maps are faster because they promise less.</li>
-    <li>Benchmarks that ignore distribution and churn can crown a broken map.</li>
-  </ol>
-  <p class="small muted">Next: Lecture 3 · Sat 10 Oct — Caching Systems: LRU, LFU and Workloads.</p>
-  <aside class="notes"><p>Exit question (optional): "Name one assumption in your own project idea that is like 'keys have random low bits' — true today, set by someone else."</p></aside>
-</section>
+<h2>Summary</h2>
+<ol>
+<li>Hash + index reduction are a matched pair; identity hash + mask fails on structured keys.</li>
+<li>Rule 1: equal keys must hash equal. Normalise at the boundary.</li>
+<li>Untrusted keys need a keyed hash or bounded input — the threat model is a requirement.</li>
+<li>Load factor must count tombstones; misses feel the cliff first.</li>
+<li>Amortised O(1) hides O(n) rehash pauses and 2× memory peaks.</li>
+<li>Contracts (stability, iteration) constrain layout; flat maps are faster because they promise less.</li>
+<li>Benchmarks that ignore distribution and churn can crown a broken map.</li>
+</ol>
+<p class="small muted">Next: Lecture 3 · Sat 10 Oct — Caching Systems: LRU, LFU and Workloads.</p>
 
+</section>
 <script src="../common/slides.js"></script>
 </body>
 </html>

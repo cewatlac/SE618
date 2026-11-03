@@ -1,338 +1,210 @@
+<!doctype html>
 <!DOCTYPE html>
+
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1" name="viewport"/>
 <title>SE618 L1 — Data Structures as Software Products</title>
-<link rel="stylesheet" href="../common/styles.css">
-<link rel="stylesheet" href="../common/print.css">
-</head>
-<body data-course="SE618" data-lecture="Lecture 1 · Sat 26 Sep 2026">
+<link href="../common/styles.css" rel="stylesheet"/>
+<link href="../common/print.css" rel="stylesheet"/>
+<meta content="SE618 Lecture 1: Data Structures as Software Products. Student-facing interactive slides." name="description"/></head>
+<body data-course="SE618" data-lecture="Lecture 1 · Sat 26 Sep 2026" data-public="true">
 
-<!-- ============================ OPENING ============================ -->
 <section class="slide title">
-  <span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
-  <h1>Lecture 1<br>Data Structures as Software Products</h1>
-  <p>From "which structure?" to "which decision, under which workload, backed by which evidence?"</p>
-  <div class="meta">Saturday 26 September 2026 · 3 hours<br>MSc Software Engineering · FCAI, Cairo University</div>
-  <aside class="notes">
-    <p><span class="t">00:00</span> Start on time; this lecture sets the norm for the semester.</p>
-    <h4>Plan for today (3h)</h4>
-    <table><tr><td>00:00–00:10</td><td>Opening, the course question</td></tr>
-    <tr><td>00:10–00:35</td><td>Part 1 — Production scenario: repeated event IDs</td></tr>
-    <tr><td>00:35–01:00</td><td>Part 2 — Textbook DSA vs engineering data structures</td></tr>
-    <tr><td>01:00–01:30</td><td>Part 3 — APIs, contracts, invariants, errors</td></tr>
-    <tr><td>01:30–01:40</td><td>Break</td></tr>
-    <tr><td>01:40–02:15</td><td>Part 4 — Design exercise: RecentSet</td></tr>
-    <tr><td>02:15–02:30</td><td>Part 5 — Evidence: tests, benchmarks, reproducibility</td></tr>
-    <tr><td>02:30–03:00</td><td>Part 6 — Course, assessment, project, deadlines</td></tr></table>
-    <p>If you run late, compress Part 5 (it is revisited every week); <strong>never</strong> compress Part 6 — students must leave knowing every mark and every deadline.</p>
-    <h4>Materials</h4>
-    <p><code>Student_Resources/recent_set.hpp</code>, <code>recent_set_test.cpp</code>, <code>recent_set_bench.cpp</code> — all compile with <code>g++ -std=c++20</code>. Have a terminal ready to run the benchmark live in Part 5.</p>
-  </aside>
-</section>
+<span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
+<h1>Lecture 1<br/>Data Structures as Software Products</h1>
+<p>From "which structure?" to "which decision, under which workload, backed by which evidence?"</p>
+<div class="meta">Saturday 26 September 2026 · 3 hours<br/>MSc Software Engineering · FCAI, Cairo University</div>
 
+</section>
 <section class="slide">
-  <h2>The question this course keeps asking</h2>
-  <p class="lead">How does a data-structure choice affect the <strong>architecture, scalability, reliability, maintainability, correctness, memory, concurrency behavior, observability</strong> and <strong>performance</strong> of a real system?</p>
-  <div class="box plain" style="margin-top:26px">
-    <span class="label">The engineering chain we will use every week</span>
-    <div class="flow"><span>requirements</span><span>workload</span><span>operations</span><span>constraints</span><span>candidate designs</span><span>API / contracts</span><span>invariants</span><span>implementation</span><span>testing</span><span>benchmarking</span><span>evidence</span><span class="hl">decision</span></div>
-  </div>
-  <p class="muted small">You already know the structures. This course is about deciding, specifying, verifying and defending.</p>
-  <aside class="notes">
-    <h4>Say</h4>
-    <p>"You have all passed a data structures course. You can implement a hash table, a heap, a balanced tree. This is not that course again. In industry nobody asks you to implement a red-black tree; they ask you why the service's p99 latency doubled after the catalogue grew, or whether the new cache will fit in the pod's memory limit. Those are data-structure questions, but they are answered with requirements, measurements and trade-offs, not with a proof."</p>
-    <h4>Point at the chain</h4>
-    <p>Every lecture follows this chain. Note that <em>implementation</em> is in the middle, not the start. Most bad engineering starts at "implementation" and back-fills a justification. Tell them: "When you get stuck in this course, walk left along this chain."</p>
-    <h4>Transition</h4>
-    <p>"Let me show you what I mean with a problem a real team had."</p>
-  </aside>
+<h2>The question this course keeps asking</h2>
+<p class="lead">How does a data-structure choice affect the <strong>architecture, scalability, reliability, maintainability, correctness, memory, concurrency behavior, observability</strong> and <strong>performance</strong> of a real system?</p>
+<div class="box plain" style="margin-top:26px">
+<span class="label">The engineering chain we will use every week</span>
+<div class="flow"><span>requirements</span><span>workload</span><span>operations</span><span>constraints</span><span>candidate designs</span><span>API / contracts</span><span>invariants</span><span>implementation</span><span>testing</span><span>benchmarking</span><span>evidence</span><span class="hl">decision</span></div>
+</div>
+<p class="muted small">You already know the structures. This course is about deciding, specifying, verifying and defending.</p>
+
 </section>
 
-<!-- ============================ PART 1 ============================ -->
 <section class="slide divider">
-  <span class="kicker">Part 1 · 00:10–00:35</span>
-  <h1>A production problem:<br>repeated event IDs</h1>
-  <aside class="notes"><p>Part 1 is discussion-heavy. Goal: students discover that "use a hash set" is the start of the analysis, not the end.</p></aside>
-</section>
+<span class="kicker">Part 1 · 00:10–00:35</span>
+<h1>A production problem:<br/>repeated event IDs</h1>
 
-<section class="slide">
-  <h2>The scenario</h2>
-  <div class="cols wide-l">
-    <div>
-      <p>A payments platform ingests events from 40 upstream services. Upstreams retry on timeout, so <strong>the same event can arrive more than once</strong>.</p>
-      <p>Processing a duplicate means charging a customer twice or double-counting revenue.</p>
-      <p>The ingestion team asks: <em>"Can you give us a component that tells us whether we have already seen this event ID?"</em></p>
-    </div>
-    <div class="card small">
-      <h3>Facts you are given</h3>
-      <ul>
-        <li>Peak: <strong>50,000 events/s</strong></li>
-        <li>IDs: UUIDv4 strings (36 chars)</li>
-        <li>Retries happen within <strong>10 minutes</strong></li>
-        <li>Service pod memory limit: <strong>2 GiB</strong></li>
-        <li>p99 budget for the check: <strong>200 µs</strong></li>
-      </ul>
-    </div>
-  </div>
-  <div class="box q"><span class="label">Ask the room</span>What is your first design? Write it down in one line. (60 seconds)</div>
-  <aside class="notes">
-    <p><span class="t">00:10</span></p>
-    <h4>Run it</h4>
-    <p>Give them one silent minute to write a one-line design. Then collect 4–5 answers aloud. You will almost certainly hear: "a hash set", "unordered_set of strings", "Redis", "a database unique constraint", maybe "a Bloom filter".</p>
-    <h4>Do not correct yet</h4>
-    <p>Write the answers on the board. Every one of them can be right. The point of the next slides is that none of them is an answer until we know the requirements. Keep the list: you will return to it on the "revisit your first answer" slide.</p>
-    <h4>Background if asked</h4>
-    <p>This is the classic <em>idempotency / deduplication</em> problem in at-least-once delivery systems (Kafka consumers, webhook receivers, payment APIs). Stripe-style APIs solve a related problem with client-supplied idempotency keys stored for ~24h. Exactly-once delivery over a network is not achievable in general; systems achieve exactly-once <em>effects</em> via deduplication plus idempotent processing.</p>
-  </aside>
 </section>
-
 <section class="slide">
-  <h2>"Just use a hash set" — ten questions first</h2>
-  <div class="cols">
-    <ol class="small">
-      <li>What are the <strong>requirements</strong>? (exact? within what window?)</li>
-      <li>What is the <strong>workload</strong>? (rates, duplicate ratio, key shape)</li>
-      <li>Which <strong>operations</strong> matter, and how often?</li>
-      <li>What are the <strong>performance constraints</strong>? (which percentile?)</li>
-      <li>What are the <strong>memory constraints</strong>?</li>
-    </ol>
-    <ol class="small" start="6">
-      <li>What <strong>guarantees</strong> are required? (restart? replicas?)</li>
-      <li>What <strong>failures</strong> are acceptable — and which are not?</li>
-      <li>What does the <strong>API promise</strong>?</li>
-      <li>What <strong>invariants</strong> must always hold?</li>
-      <li>How will <strong>correctness</strong> and <strong>performance claims</strong> be validated?</li>
-    </ol>
-  </div>
-  <div class="box key">These ten questions are the backbone of every project proposal, design document and viva in this course.</div>
-  <aside class="notes">
-    <p><span class="t">00:15</span></p>
-    <h4>Say</h4>
-    <p>"A hash set answers one question: how to test membership in expected constant time. It says nothing about the other nine. Let us answer them for this system."</p>
-    <h4>Tip</h4>
-    <p>Tell students to photograph this slide. You will refer to it as "the ten questions" all semester, and the viva questions are variations of it.</p>
-    <h4>Transition</h4>
-    <p>"Start with the one that engineers skip most often: the workload, in numbers."</p>
-  </aside>
+<h2>The scenario</h2>
+<div class="cols wide-l">
+<div>
+<p>A payments platform ingests events from 40 upstream services. Upstreams retry on timeout, so <strong>the same event can arrive more than once</strong>.</p>
+<p>Processing a duplicate means charging a customer twice or double-counting revenue.</p>
+<p>The ingestion team asks: <em>"Can you give us a component that tells us whether we have already seen this event ID?"</em></p>
+</div>
+<div class="card small">
+<h3>Facts you are given</h3>
+<ul>
+<li>Peak: <strong>50,000 events/s</strong></li>
+<li>IDs: UUIDv4 strings (36 chars)</li>
+<li>Retries happen within <strong>10 minutes</strong></li>
+<li>Service pod memory limit: <strong>2 GiB</strong></li>
+<li>p99 budget for the check: <strong>200 µs</strong></li>
+</ul>
+</div>
+</div>
+<div class="box q"><span class="label">Ask the room</span>What is your first design? Write it down in one line. (60 seconds)</div>
+
 </section>
-
 <section class="slide">
-  <h2>Workload in numbers: what must we remember?</h2>
-  <div class="cols">
-    <div>
-      <p>50,000 events/s × 600 s window =</p>
-      <p class="lead" style="font-size:40px;margin:6px 0 18px"><strong>30,000,000</strong> live IDs</p>
-      <p class="small">Memory per entry depends on <em>representation</em>, not on the name "hash set".</p>
-    </div>
-    <table class="tight">
-      <tr><th>Representation</th><th class="num">≈ bytes/entry</th><th class="num">× 30M</th></tr>
-      <tr><td><code>unordered_set&lt;string&gt;</code>, 36-char UUID</td><td class="num">~120</td><td class="num">~3.6 GB</td></tr>
-      <tr><td><code>unordered_set</code> of 128-bit binary ID</td><td class="num">~56</td><td class="num">~1.7 GB</td></tr>
-      <tr><td>Open-addressing table, 16 B keys, load 0.5</td><td class="num">~32</td><td class="num">~1.0 GB</td></tr>
-      <tr><td>Bloom filter, 0.1% false positive</td><td class="num">~1.8</td><td class="num">~54 MB</td></tr>
-    </table>
-  </div>
-  <div class="box warn">The limit is 2 GiB. The "obvious" design does not fit — before we have written a line of code.</div>
-  <aside class="notes">
-    <p><span class="t">00:18</span> Work the first row on the board with them.</p>
-    <h4>Derivation (libstdc++, 64-bit — say "approximately", these are estimates)</h4>
-    <ul>
-      <li>36-char UUID in <code>std::string</code>: 32 B object; 36 chars exceed the 15-char small-string buffer, so a heap block of 37 B → ~48 B with allocator rounding/header.</li>
-      <li>Hash node: next pointer 8 + cached hash 8 + string 32 = 48 B → allocation ~64 B.</li>
-      <li>Bucket array: 8 B per bucket at load ≤ 1.</li>
-      <li>Total ≈ 48 + 64 + 8 ≈ 120 B. 30M × 120 B ≈ 3.6 GB.</li>
-      <li>Binary 128-bit ID: node = 8 next + 16 key (+8 hash if cached) → 32–48 B allocation incl. header, + 8 bucket ≈ 56 B.</li>
-      <li>Flat open addressing with 16 B slots at load 0.5: 32 B per live entry, one allocation total.</li>
-      <li>Bloom filter: bits per element = −ln(p)/ln(2)² ≈ 14.4 bits for p=0.001 ≈ 1.8 B.</li>
-    </ul>
-    <h4>Key teaching point</h4>
-    <p>Changing the <em>representation of the key</em> (parse the UUID into 16 bytes) halves memory without changing the algorithm. Changing the <em>memory layout</em> (flat table) nearly halves it again. Changing the <em>guarantee</em> (probabilistic) buys 30×. Each is a different kind of engineering decision. We will study all three this semester (Weeks 2, 10, 11).</p>
-    <h4>Expected objection</h4>
-    <p>"Just add memory." Answer: sometimes right! But it is a cost decision that must be made consciously, and at 3× traffic growth it fails again. Also: 3.6 GB of small allocations means allocator fragmentation and long GC-like pauses when the set is destroyed or rehashed — rehash of 30M entries is a latency spike of seconds, which violates the 200 µs p99.</p>
-  </aside>
+<h2>"Just use a hash set" — ten questions first</h2>
+<div class="cols">
+<ol class="small">
+<li>What are the <strong>requirements</strong>? (exact? within what window?)</li>
+<li>What is the <strong>workload</strong>? (rates, duplicate ratio, key shape)</li>
+<li>Which <strong>operations</strong> matter, and how often?</li>
+<li>What are the <strong>performance constraints</strong>? (which percentile?)</li>
+<li>What are the <strong>memory constraints</strong>?</li>
+</ol>
+<ol class="small" start="6">
+<li>What <strong>guarantees</strong> are required? (restart? replicas?)</li>
+<li>What <strong>failures</strong> are acceptable — and which are not?</li>
+<li>What does the <strong>API promise</strong>?</li>
+<li>What <strong>invariants</strong> must always hold?</li>
+<li>How will <strong>correctness</strong> and <strong>performance claims</strong> be validated?</li>
+</ol>
+</div>
+<div class="box key">These ten questions are the backbone of every project proposal, design document and viva in this course.</div>
+
 </section>
-
 <section class="slide">
-  <h2>Which failures are acceptable?</h2>
-  <div class="cols">
-    <div class="card">
-      <h3>False "duplicate"</h3>
-      <p class="small">A new event is reported as already seen → it is <strong>dropped</strong>.</p>
-      <p class="small">Payments: a real charge is silently lost.</p>
-    </div>
-    <div class="card">
-      <h3>Missed duplicate</h3>
-      <p class="small">A repeated event is reported as new → it is <strong>processed twice</strong>.</p>
-      <p class="small">Payments: double charge — unless downstream is idempotent.</p>
-    </div>
-  </div>
-  <div class="box q" style="margin-top:20px"><span class="label">Discuss in pairs · 3 min</span>
+<h2>Workload in numbers: what must we remember?</h2>
+<div class="cols">
+<div>
+<p>50,000 events/s × 600 s window =</p>
+<p class="lead" style="font-size:40px;margin:6px 0 18px"><strong>30,000,000</strong> live IDs</p>
+<p class="small">Memory per entry depends on <em>representation</em>, not on the name "hash set".</p>
+</div>
+<table class="tight">
+<tr><th>Representation</th><th class="num">≈ bytes/entry</th><th class="num">× 30M</th></tr>
+<tr><td><code>unordered_set&lt;string&gt;</code>, 36-char UUID</td><td class="num">~120</td><td class="num">~3.6 GB</td></tr>
+<tr><td><code>unordered_set</code> of 128-bit binary ID</td><td class="num">~56</td><td class="num">~1.7 GB</td></tr>
+<tr><td>Open-addressing table, 16 B keys, load 0.5</td><td class="num">~32</td><td class="num">~1.0 GB</td></tr>
+<tr><td>Bloom filter, 0.1% false positive</td><td class="num">~1.8</td><td class="num">~54 MB</td></tr>
+</table>
+</div>
+<div class="box warn">The limit is 2 GiB. The "obvious" design does not fit — before we have written a line of code.</div>
+
+</section>
+<section class="slide">
+<h2>Which failures are acceptable?</h2>
+<div class="cols">
+<div class="card">
+<h3>False "duplicate"</h3>
+<p class="small">A new event is reported as already seen → it is <strong>dropped</strong>.</p>
+<p class="small">Payments: a real charge is silently lost.</p>
+</div>
+<div class="card">
+<h3>Missed duplicate</h3>
+<p class="small">A repeated event is reported as new → it is <strong>processed twice</strong>.</p>
+<p class="small">Payments: double charge — unless downstream is idempotent.</p>
+</div>
+</div>
+<div class="box q" style="margin-top:20px"><span class="label">Discuss in pairs · 3 min</span>
     A Bloom filter can produce only one of these two errors. Which one? Is it acceptable here? What would you add to make it acceptable?</div>
-  <aside class="notes">
-    <p><span class="t">00:23</span></p>
-    <h4>Expected answer</h4>
-    <p>A Bloom filter has <strong>false positives only</strong>: it may say "seen" for a new ID. That is the <em>worse</em> error for payments (silent loss). So a Bloom filter alone is unacceptable here.</p>
-    <p>Fix: use the Bloom filter as a <em>fast negative path</em>: "definitely new" → process; "maybe seen" → confirm against an exact store (database unique index / key-value store). With 0.1% FP rate, only ~0.1% of new events + the true duplicates hit the slow exact check. This is a two-tier design: approximate filter + exact authority. It reappears in Week 10.</p>
-    <h4>Also draw out</h4>
-    <ul>
-      <li>Which error is acceptable depends on <strong>product semantics</strong>, not on the data structure. For analytics page-view counting, a missed duplicate is harmless and a false duplicate is harmless too — both just skew a number by 0.1%.</li>
-      <li>Restart: an in-memory set forgets everything on deploy. Is a burst of missed duplicates after deploy acceptable? That is requirement #6 (guarantees). Options: persist/replay the last 10 minutes from the log on startup.</li>
-    </ul>
-    <h4>Misconception to catch</h4>
-    <p>"Probabilistic means unreliable." No: its error is one-sided, bounded and <em>tunable</em>. Unbounded, unmeasured error is unreliable.</p>
-  </aside>
-</section>
 
+</section>
 <section class="slide">
-  <h2>Revisit your first answer</h2>
-  <table>
-    <tr><th>Candidate</th><th>What it silently assumed</th></tr>
-    <tr><td><code>unordered_set&lt;string&gt;</code></td><td>Memory is free; no restart; rehash pauses are fine</td></tr>
-    <tr><td>Database unique constraint</td><td>A round trip (≈ 0.5–2 ms) fits a 200 µs budget</td></tr>
-    <tr><td>Bloom filter alone</td><td>Dropping a genuine payment is acceptable</td></tr>
-    <tr><td>"Keep the last N IDs"</td><td>Count-based window ≈ time-based window at all traffic levels</td></tr>
-  </table>
-  <div class="box key" style="margin-top:20px">None of these is wrong in general. Each is wrong <em>for a stated requirement</em>. Engineering is making those assumptions visible.</div>
-  <aside class="notes">
-    <p><span class="t">00:30</span> Go back to the board list from the scenario slide and map each student answer to a row.</p>
-    <h4>The last row matters for the exercise later</h4>
-    <p>"Last N IDs" at 50k/s with N = 30M covers 10 minutes. At night traffic is 2k/s, so the same N covers 4 hours — harmless. But during a traffic spike of 150k/s, N covers only 3.3 minutes: retries at minute 5 are missed. A count window's time coverage varies inversely with traffic, <em>exactly when you need it most</em>. Plant this; students will rediscover it in Part 4.</p>
-    <h4>Transition</h4>
-    <p>"So what is different between how you learned data structures and how we will treat them?"</p>
-  </aside>
+<h2>Revisit your first answer</h2>
+<table>
+<tr><th>Candidate</th><th>What it silently assumed</th></tr>
+<tr><td><code>unordered_set&lt;string&gt;</code></td><td>Memory is free; no restart; rehash pauses are fine</td></tr>
+<tr><td>Database unique constraint</td><td>A round trip (≈ 0.5–2 ms) fits a 200 µs budget</td></tr>
+<tr><td>Bloom filter alone</td><td>Dropping a genuine payment is acceptable</td></tr>
+<tr><td>"Keep the last N IDs"</td><td>Count-based window ≈ time-based window at all traffic levels</td></tr>
+</table>
+<div class="box key" style="margin-top:20px">None of these is wrong in general. Each is wrong <em>for a stated requirement</em>. Engineering is making those assumptions visible.</div>
+
 </section>
 
-<!-- ============================ PART 2 ============================ -->
 <section class="slide divider">
-  <span class="kicker">Part 2 · 00:35–01:00</span>
-  <h1>Textbook DSA vs<br>engineering data structures</h1>
+<span class="kicker">Part 2 · 00:35–01:00</span>
+<h1>Textbook DSA vs<br/>engineering data structures</h1>
 </section>
-
 <section class="slide">
-  <h2>Two different questions</h2>
-  <table>
-    <tr><th></th><th>Textbook DSA</th><th>Engineering data structures</th></tr>
-    <tr><td><strong>Starts from</strong></td><td>An abstract operation set</td><td>Users, workload, constraints</td></tr>
-    <tr><td><strong>Cost model</strong></td><td>Count operations, n → ∞</td><td>Time, tail latency, bytes, allocations, cache misses at the real n</td></tr>
-    <tr><td><strong>Correct means</strong></td><td>Output matches the specification</td><td>… and failures are defined, observable and recoverable</td></tr>
-    <tr><td><strong>Interface</strong></td><td>Implied by the algorithm</td><td>Designed, versioned, documented; hides representation</td></tr>
-    <tr><td><strong>Evidence</strong></td><td>Proof</td><td>Proof where useful + tests + benchmarks + production metrics</td></tr>
-    <tr><td><strong>Lifetime</strong></td><td>One run</td><td>Years, many maintainers, changing requirements</td></tr>
-  </table>
-  <aside class="notes">
-    <p><span class="t">00:35</span></p>
-    <h4>Say</h4>
-    <p>"Nothing on the left is wrong. The left column is necessary; it is not sufficient. Complexity analysis tells you how cost <em>grows</em>; it does not tell you the cost at the n you have, or what happens when a request is slow, or whether another team can use your code safely."</p>
-    <h4>Ask</h4>
-    <p>"Name a data structure that is asymptotically optimal but rarely used in practice." Expected: Fibonacci heaps (decrease-key O(1) amortized, but large constants and pointer-heavy — binary/d-ary heaps usually win), van Emde Boas trees, sometimes linked lists vs vectors for insertion in the middle.</p>
-    <h4>Transition</h4>
-    <p>"Let me show you evidence of the cost-model gap with the exact problem we just discussed."</p>
-  </aside>
+<h2>Two different questions</h2>
+<table>
+<tr><th></th><th>Textbook DSA</th><th>Engineering data structures</th></tr>
+<tr><td><strong>Starts from</strong></td><td>An abstract operation set</td><td>Users, workload, constraints</td></tr>
+<tr><td><strong>Cost model</strong></td><td>Count operations, n → ∞</td><td>Time, tail latency, bytes, allocations, cache misses at the real n</td></tr>
+<tr><td><strong>Correct means</strong></td><td>Output matches the specification</td><td>… and failures are defined, observable and recoverable</td></tr>
+<tr><td><strong>Interface</strong></td><td>Implied by the algorithm</td><td>Designed, versioned, documented; hides representation</td></tr>
+<tr><td><strong>Evidence</strong></td><td>Proof</td><td>Proof where useful + tests + benchmarks + production metrics</td></tr>
+<tr><td><strong>Lifetime</strong></td><td>One run</td><td>Years, many maintainers, changing requirements</td></tr>
+</table>
+
 </section>
-
 <section class="slide">
-  <h2>Asymptotics vs measured behavior</h2>
-  <div class="cols wide-r">
-    <div class="small">
-      <p>Same contract, two designs:</p>
-      <ul>
-        <li><strong>vector</strong>: linear scan, O(capacity) per add</li>
-        <li><strong>list + hash map</strong>: O(1) expected per add</li>
-      </ul>
-      <p class="xsmall muted">One run, instructor laptop, MinGW g++ 15 -O2, 200k ops, 1% duplicates. <code>Student_Resources/recent_set_bench.cpp</code></p>
-    </div>
-    <table class="tight">
-      <tr><th class="num">capacity</th><th class="num">vector ns/op</th><th class="num">list+map ns/op</th><th>faster</th></tr>
-      <tr><td class="num">16</td><td class="num">10</td><td class="num">72</td><td>vector ×7</td></tr>
-      <tr><td class="num">256</td><td class="num">100</td><td class="num">77</td><td>≈ tie</td></tr>
-      <tr><td class="num">4,096</td><td class="num">1,397</td><td class="num">76</td><td>map ×18</td></tr>
-      <tr><td class="num">65,536</td><td class="num">—</td><td class="num">79</td><td></td></tr>
-    </table>
-  </div>
-  <div class="box q" style="margin-top:18px"><span class="label">Ask</span>Why does the O(n) design win at n = 16? What would move the crossover point?</div>
-  <aside class="notes">
-    <p><span class="t">00:42</span> If you have time, run <code>Student_Resources/recent_set_bench.cpp</code> live now instead of trusting the table — your numbers will differ, which is itself a lesson.</p>
-    <h4>Expected answers — why vector wins small</h4>
-    <ul>
-      <li>16 × 8-byte keys = 128 B = two cache lines. A linear scan is a few predictable loads; the CPU prefetches and vectorises comparisons.</li>
-      <li>list+map does, per insert: hash computation, bucket lookup, <strong>two heap allocations</strong> (list node + map node), and on eviction two frees. Allocation alone is ~20–50 ns.</li>
-      <li>Pointer chasing: each hop is a potential cache miss.</li>
-    </ul>
-    <h4>What moves the crossover</h4>
-    <p>Key size (strings: comparisons get costlier, hashing too), allocator quality, whether keys are hot in cache, the duplicate rate (a duplicate stops the scan early; a new key scans everything), CPU and cache sizes. Typical crossovers for scan-vs-hash are in the tens to low hundreds of elements.</p>
-    <h4>What this table does NOT show (preview of Part 5)</h4>
-    <p>Single run, no variance; mean only (no p99); one machine; one key type; synthetic IDs. It is an <em>illustration</em>, not evidence for a production decision.</p>
-    <h4>Engineering consequence</h4>
-    <p>Real libraries exploit this: small-size optimisations (<code>absl::InlinedVector</code>, small-string optimisation, Swiss tables' SIMD probing of 16 slots at once, sorted-vector "flat maps"). The best design can be a hybrid chosen by size.</p>
-  </aside>
+<h2>Asymptotics vs measured behavior</h2>
+<div class="cols wide-r">
+<div class="small">
+<p>Same contract, two designs:</p>
+<ul>
+<li><strong>vector</strong>: linear scan, O(capacity) per add</li>
+<li><strong>list + hash map</strong>: O(1) expected per add</li>
+</ul>
+<p class="xsmall muted">One run, instructor laptop, MinGW g++ 15 -O2, 200k ops, 1% duplicates. <code>Student_Resources/recent_set_bench.cpp</code></p>
+</div>
+<table class="tight">
+<tr><th class="num">capacity</th><th class="num">vector ns/op</th><th class="num">list+map ns/op</th><th>faster</th></tr>
+<tr><td class="num">16</td><td class="num">10</td><td class="num">72</td><td>vector ×7</td></tr>
+<tr><td class="num">256</td><td class="num">100</td><td class="num">77</td><td>≈ tie</td></tr>
+<tr><td class="num">4,096</td><td class="num">1,397</td><td class="num">76</td><td>map ×18</td></tr>
+<tr><td class="num">65,536</td><td class="num">—</td><td class="num">79</td><td></td></tr>
+</table>
+</div>
+<div class="box q" style="margin-top:18px"><span class="label">Ask</span>Why does the O(n) design win at n = 16? What would move the crossover point?</div>
+
 </section>
-
 <section class="slide">
-  <h2>Where system performance hides</h2>
-  <div class="cols c3 small">
-    <div class="card"><h3>Memory hierarchy</h3><p>L1 ≈ 1 ns, RAM ≈ 80–100 ns. A cache miss costs ~100 comparisons. Layout often beats operation count.</p></div>
-    <div class="card"><h3>Allocation</h3><p>Every node = malloc + free + header bytes + fragmentation. Node-based containers pay per element.</p></div>
-    <div class="card"><h3>Tail latency</h3><p>Amortised O(1) hides the O(n) rehash. Users feel the p99, not the mean.</p></div>
-    <div class="card"><h3>Constant factors</h3><p>Hashing a 36-byte string costs more than comparing two integers ten times.</p></div>
-    <div class="card"><h3>Concurrency</h3><p>A shared structure behind one lock serialises all cores.</p></div>
-    <div class="card"><h3>Input distribution</h3><p>Skew, adversarial keys, sorted input — "expected" assumes a distribution.</p></div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:48</span></p>
-    <h4>Numbers worth quoting (order of magnitude, modern x86)</h4>
-    <p>L1 hit ~1 ns (4 cycles), L2 ~4 ns, L3 ~10–15 ns, DRAM ~80–100 ns, malloc/free pair ~20–60 ns, mutex uncontended ~20 ns, contended ~µs, SSD read ~20–100 µs, same-datacenter network round trip ~0.5 ms.</p>
-    <h4>Tail latency example</h4>
-    <p>A hash set growing from 16M to 32M entries rehashes 16M entries in one call: easily 0.5–1 s. Amortised cost per insert is tiny; the one unlucky request that triggers it times out. Mitigations: reserve up front, incremental rehash (Redis does this: it keeps two tables and migrates a few buckets per operation), or bounded-size structures.</p>
-    <h4>Map to weeks</h4>
-    <p>Hashing and layout: Week 2. Distribution/workload: Weeks 3, 6. Concurrency and hardware: Week 11. Measurement: Week 12. Tell students the course is the systematic study of this slide.</p>
-  </aside>
+<h2>Where system performance hides</h2>
+<div class="cols c3 small">
+<div class="card"><h3>Memory hierarchy</h3><p>L1 ≈ 1 ns, RAM ≈ 80–100 ns. A cache miss costs ~100 comparisons. Layout often beats operation count.</p></div>
+<div class="card"><h3>Allocation</h3><p>Every node = malloc + free + header bytes + fragmentation. Node-based containers pay per element.</p></div>
+<div class="card"><h3>Tail latency</h3><p>Amortised O(1) hides the O(n) rehash. Users feel the p99, not the mean.</p></div>
+<div class="card"><h3>Constant factors</h3><p>Hashing a 36-byte string costs more than comparing two integers ten times.</p></div>
+<div class="card"><h3>Concurrency</h3><p>A shared structure behind one lock serialises all cores.</p></div>
+<div class="card"><h3>Input distribution</h3><p>Skew, adversarial keys, sorted input — "expected" assumes a distribution.</p></div>
+</div>
+
 </section>
-
 <section class="slide">
-  <h2>A data structure as a software product</h2>
-  <div class="cols">
-    <div>
-      <p>A product has <strong>users who cannot read its internals</strong>. What do they need?</p>
-      <ul class="small">
-        <li>An <strong>API</strong> that is hard to misuse</li>
-        <li>A <strong>contract</strong>: what is promised, what is not</li>
-        <li><strong>Defined failure</strong> behavior they can observe and handle</li>
-        <li><strong>Evidence</strong>: tests and benchmarks they can re-run</li>
-        <li><strong>Documentation</strong> of limits and assumptions</li>
-        <li><strong>Stability</strong>: internals can change without breaking them</li>
-      </ul>
-    </div>
-    <div class="box q"><span class="label">Ask</span>
+<h2>A data structure as a software product</h2>
+<div class="cols">
+<div>
+<p>A product has <strong>users who cannot read its internals</strong>. What do they need?</p>
+<ul class="small">
+<li>An <strong>API</strong> that is hard to misuse</li>
+<li>A <strong>contract</strong>: what is promised, what is not</li>
+<li><strong>Defined failure</strong> behavior they can observe and handle</li>
+<li><strong>Evidence</strong>: tests and benchmarks they can re-run</li>
+<li><strong>Documentation</strong> of limits and assumptions</li>
+<li><strong>Stability</strong>: internals can change without breaking them</li>
+</ul>
+</div>
+<div class="box q"><span class="label">Ask</span>
       You are the on-call engineer. At 03:00 the dedup component is suspected of dropping payments. What would you want it to have been built with?</div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:53</span></p>
-    <h4>Expected answers to the on-call question</h4>
-    <ul>
-      <li>Metrics: count of duplicates detected, entries, evictions, early evictions, memory.</li>
-      <li>A way to ask "was this ID seen, and when?" — i.e. debuggability.</li>
-      <li>Deterministic behavior: replaying yesterday's log gives the same decisions (so time must be an input, not read from the wall clock inside — we will see this in the exercise).</li>
-      <li>Clear documentation of what the component does <em>not</em> guarantee (e.g. dedup lost across restarts).</li>
-      <li>Logs on degraded mode ("memory limit reached, evicting early").</li>
-    </ul>
-    <h4>Point</h4>
-    <p>Observability is a data-structure concern: counters must be maintained inside operations, and some designs make them cheap (a size field) while others make them expensive (counting a Bloom filter's contents is only an estimate).</p>
-    <h4>Transition</h4>
-    <p>"Let us make 'contract' precise. That is Part 3."</p>
-  </aside>
+</div>
+
 </section>
 
-<!-- ============================ PART 3 ============================ -->
 <section class="slide divider">
-  <span class="kicker">Part 3 · 01:00–01:30</span>
-  <h1>APIs, contracts, invariants<br>and observable errors</h1>
+<span class="kicker">Part 3 · 01:00–01:30</span>
+<h1>APIs, contracts, invariants<br/>and observable errors</h1>
 </section>
-
 <section class="slide">
-  <h2>A first API — critique it</h2>
-  <pre><code>template &lt;class Key&gt;
+<h2>A first API — critique it</h2>
+<pre><code>template &lt;class Key&gt;
 class RecentSet {
 public:
     explicit RecentSet(std::size_t capacity);
@@ -342,58 +214,27 @@ public:
     std::size_t size();
     std::list&lt;Key&gt;&amp; items();            // "for debugging"
 };</code></pre>
-  <div class="box q"><span class="label">Pairs · 4 min</span>Find at least five problems. For each: who gets hurt, and when?</div>
-  <aside class="notes">
-    <p><span class="t">01:00</span></p>
-    <h4>Expected findings (aim for all of these; reveal the rest yourself)</h4>
-    <ol>
-      <li><code>add</code> returning <code>bool</code> "false on failure": false could mean duplicate, capacity reached, or allocation failure. Caller cannot distinguish "duplicate — drop it" from "error — retry". <strong>Most serious: this is where payments get dropped.</strong></li>
-      <li><code>contains</code> is non-const: is it allowed to change state (e.g. refresh recency)? Name and constness must tell the truth about side effects.</li>
-      <li><code>size()</code> non-const and not <code>noexcept</code>: cannot be called on a const reference; minor but signals carelessness.</li>
-      <li><code>items()</code> returns a mutable reference to internal representation: callers can break invariants (push a key into the list without the map), and the implementation can never change from <code>std::list</code>. "For debugging" APIs become production dependencies (Hyrum's Law).</li>
-      <li>Capacity 0: unspecified.</li>
-      <li>Eviction is invisible: caller cannot learn which key was evicted (needed for metrics or to spill to a second tier).</li>
-      <li>Duplicate semantics unspecified: does re-adding refresh the position?</li>
-      <li>Thread-safety unspecified.</li>
-      <li>No hash/equality customisation — custom key types cannot be used.</li>
-    </ol>
-    <h4>Hyrum's Law (quote informally)</h4>
-    <p>With enough users, every observable behavior of your system will be depended on by somebody — whatever the contract says. Therefore: minimise what is observable, and specify what is.</p>
-  </aside>
-</section>
+<div class="box q"><span class="label">Pairs · 4 min</span>Find at least five problems. For each: who gets hurt, and when?</div>
 
-<section class="slide">
-  <h2>What a contract specifies</h2>
-  <table class="small">
-    <tr><th>Element</th><th>For <code>add(k)</code> — one possible choice</th></tr>
-    <tr><td>Precondition</td><td>None beyond a valid object (any key accepted)</td></tr>
-    <tr><td>Postcondition</td><td><code>contains(k)</code>; <code>size() ≤ capacity()</code>; if inserted and full, the oldest key was removed and is returned</td></tr>
-    <tr><td>Duplicate semantics</td><td>Reported as <code>inserted = false</code>; position <strong>not</strong> refreshed</td></tr>
-    <tr><td>Complexity promise</td><td>O(1) expected, O(n) worst case (hash collisions)</td></tr>
-    <tr><td>Exception guarantee</td><td>Strong: if it throws (<code>bad_alloc</code>), the set is unchanged</td></tr>
-    <tr><td>Invalidation / lifetime</td><td>Returns values, never references into the structure</td></tr>
-    <tr><td>Thread-safety</td><td>None; external synchronisation required</td></tr>
-  </table>
-  <p class="small muted" style="margin-top:10px">The contract is a design artifact. Write it <em>before</em> the implementation, and test it.</p>
-  <aside class="notes">
-    <p><span class="t">01:07</span></p>
-    <h4>Teach the vocabulary</h4>
-    <ul>
-      <li><strong>Precondition</strong>: caller's obligation. Violation = caller bug. Choose between checking (throw/assert) or documenting UB. In libraries used across teams, prefer checking at boundaries.</li>
-      <li><strong>Postcondition</strong>: implementation's obligation if preconditions held.</li>
-      <li><strong>Exception safety levels</strong> (C++): no-throw, strong (commit-or-rollback), basic (valid but unspecified state, no leaks), none. The reference implementation achieves strong for <code>add</code> by inserting into the list, then the map, and undoing the list insert if the map throws — show that code on the next slide.</li>
-      <li><strong>Complexity promise</strong>: part of the contract. <code>std::unordered_map</code> promises average O(1), worst O(n). If you promise O(1) worst-case, you cannot switch to a design that doesn't have it.</li>
-    </ul>
-    <h4>Ownership/lifetime</h4>
-    <p>Returning references or iterators into the structure creates a lifetime coupling: the caller's reference dies when the key is evicted by some <em>other</em> call. Classic dangling-reference bug. Returning by value (or <code>std::optional&lt;Key&gt;</code>) avoids it at the cost of a copy — a deliberate trade.</p>
-    <h4>Ask</h4>
-    <p>"Why not refresh the position on duplicate?" Answer: then it becomes LRU; a retry storm would keep an ID alive forever; the window would no longer mean "first seen within". Both are valid <em>products</em> — the point is to choose and write it down.</p>
-  </aside>
 </section>
-
 <section class="slide">
-  <h2>Revised API: make outcomes explicit</h2>
-  <pre class="sm"><code>template &lt;class Key&gt;
+<h2>What a contract specifies</h2>
+<table class="small">
+<tr><th>Element</th><th>For <code>add(k)</code> — one possible choice</th></tr>
+<tr><td>Precondition</td><td>None beyond a valid object (any key accepted)</td></tr>
+<tr><td>Postcondition</td><td><code>contains(k)</code>; <code>size() ≤ capacity()</code>; if inserted and full, the oldest key was removed and is returned</td></tr>
+<tr><td>Duplicate semantics</td><td>Reported as <code>inserted = false</code>; position <strong>not</strong> refreshed</td></tr>
+<tr><td>Complexity promise</td><td>O(1) expected, O(n) worst case (hash collisions)</td></tr>
+<tr><td>Exception guarantee</td><td>Strong: if it throws (<code>bad_alloc</code>), the set is unchanged</td></tr>
+<tr><td>Invalidation / lifetime</td><td>Returns values, never references into the structure</td></tr>
+<tr><td>Thread-safety</td><td>None; external synchronisation required</td></tr>
+</table>
+<p class="small muted" style="margin-top:10px">The contract is a design artifact. Write it <em>before</em> the implementation, and test it.</p>
+
+</section>
+<section class="slide">
+<h2>Revised API: make outcomes explicit</h2>
+<pre class="sm"><code>template &lt;class Key&gt;
 struct AddOutcome {
     bool inserted;               // false =&gt; duplicate
     std::optional&lt;Key&gt; evicted;  // set when insertion pushed out the oldest key
@@ -411,176 +252,114 @@ public:
     void clear() noexcept;
     bool check_invariants() const;                 // O(n); tests / debug only
 };</code></pre>
-  <aside class="notes">
-    <p><span class="t">01:13</span></p>
-    <h4>Walk through each decision and why</h4>
-    <ul>
-      <li><code>AddOutcome</code>: the three situations are now distinguishable. Allocation failure is an exception, not a return value — it is exceptional and the caller usually cannot handle it locally.</li>
-      <li><code>evicted</code> as <code>optional&lt;Key&gt;</code>: enables metrics ("evictions/s") and tiered designs (spill the evicted key to a slower store).</li>
-      <li><code>erase</code> of a missing key returns false: absence is a normal outcome. Exceptions for normal outcomes make callers write try/catch as control flow.</li>
-      <li>Capacity 0 throws: a zero-capacity dedup set silently accepts every duplicate — dangerous. Throwing at construction fails fast, at startup, in configuration code.</li>
-      <li><code>check_invariants()</code> public but documented as O(n) diagnostics. Alternative: keep it private and friend the test. Discuss briefly.</li>
-    </ul>
-    <h4>Alternative worth mentioning</h4>
-    <p><code>enum class AddResult { Inserted, Duplicate, InsertedWithEviction }</code> plus a separate way to obtain the evicted key. Or <code>std::expected</code> (C++23) for fallible operations. Several good answers exist; ambiguity is the only wrong one.</p>
-  </aside>
-</section>
 
-<section class="slide">
-  <h2>Representation and its invariants</h2>
-  <div class="cols wide-r">
-    <div class="small">
-      <p><code>order_</code>: <code>std::list&lt;Key&gt;</code>, oldest at front<br><code>index_</code>: <code>unordered_map&lt;Key, list::iterator&gt;</code></p>
-      <h3>Invariants</h3>
-      <ol>
-        <li><code>size() ≤ capacity()</code></li>
-        <li><code>order_</code> and <code>index_</code> hold the same key set</li>
-        <li><code>index_[k]</code> points at the node holding <code>k</code></li>
-        <li>each key appears once in <code>order_</code></li>
-        <li>front of <code>order_</code> = oldest first-insertion</li>
-      </ol>
-    </div>
-    <svg viewBox="0 0 620 330" aria-label="hash index pointing into recency list">
-      <defs><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#0b6e75"/></marker></defs>
-      <text x="10" y="22" font-size="17" fill="#46505e">index_ (hash map)</text>
-      <g font-size="18" font-family="Consolas,monospace">
-        <rect x="10" y="34" width="150" height="42" fill="#e3f1f2" stroke="#0b6e75"/><text x="24" y="61">"e91…"</text>
-        <rect x="10" y="84" width="150" height="42" fill="#e3f1f2" stroke="#0b6e75"/><text x="24" y="111">"07c…"</text>
-        <rect x="10" y="134" width="150" height="42" fill="#e3f1f2" stroke="#0b6e75"/><text x="24" y="161">"a3f…"</text>
-      </g>
-      <text x="40" y="326" font-size="17" fill="#46505e">order_ (list)   oldest → newest</text>
-      <g font-size="18" font-family="Consolas,monospace">
-        <rect x="40" y="254" width="140" height="46" rx="6" fill="#fff" stroke="#14304a"/><text x="58" y="283">"a3f…"</text>
-        <rect x="240" y="254" width="140" height="46" rx="6" fill="#fff" stroke="#14304a"/><text x="258" y="283">"e91…"</text>
-        <rect x="440" y="254" width="140" height="46" rx="6" fill="#fff" stroke="#14304a"/><text x="458" y="283">"07c…"</text>
-      </g>
-      <path d="M180,270 H240 M240,284 H180" stroke="#14304a" stroke-width="1.5"/>
-      <path d="M380,270 H440 M440,284 H380" stroke="#14304a" stroke-width="1.5"/>
-      <path d="M160,55 C330,70 330,200 310,252" fill="none" stroke="#0b6e75" stroke-width="2" marker-end="url(#a1)"/>
-      <path d="M160,105 C470,110 520,190 510,252" fill="none" stroke="#0b6e75" stroke-width="2" marker-end="url(#a1)"/>
-      <path d="M160,155 C120,190 110,220 110,252" fill="none" stroke="#0b6e75" stroke-width="2" marker-end="url(#a1)"/>
-    </svg>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:18</span></p>
-    <h4>Say</h4>
-    <p>"An invariant is a statement about the representation that is true between every pair of public calls. Each public method may break it temporarily, but must restore it before returning — including when it throws."</p>
-    <h4>Ask: which invariant is most likely to break during refactoring?</h4>
-    <p>Expected: #3 — the iterator in the map. <code>std::list</code> iterators stay valid across other insertions/erasures, which is <em>why</em> list is used. If someone "optimises" by switching <code>order_</code> to <code>std::vector</code> or <code>std::deque</code> (erase in the middle / push_front invalidates iterators), every stored iterator dangles. The compiler will not complain. Only tests (with sanitizers) will.</p>
-    <h4>Ask: how would a test detect a broken invariant?</h4>
-    <p>Call <code>check_invariants()</code> after every operation in randomized tests. It walks the list and verifies each map entry points to the right node. That is O(n) — fine in tests, not in production. In debug builds you can <code>assert(check_invariants())</code> at the end of each mutator.</p>
-    <h4>Memory cost of this representation (connect to Part 1)</h4>
-    <p>Per key: list node (2 pointers + key) + map node (next + key copy + iterator + hash) + bucket = the key is stored <strong>twice</strong>. An alternative stores the key once in the map and has the list hold pointers to map nodes, or uses an intrusive list. Engineering is choosing which cost to pay.</p>
-  </aside>
 </section>
-
 <section class="slide">
-  <h2>Errors and observable behavior</h2>
-  <table class="small">
-    <tr><th>Situation</th><th>Normal or exceptional?</th><th>Mechanism</th></tr>
-    <tr><td>Duplicate key</td><td>Normal, expected</td><td>Return value</td></tr>
-    <tr><td>Erase missing key</td><td>Normal</td><td>Return <code>false</code></td></tr>
-    <tr><td>Capacity 0 at construction</td><td>Configuration bug</td><td>Throw at startup (fail fast)</td></tr>
-    <tr><td>Out of memory</td><td>Exceptional</td><td><code>std::bad_alloc</code>, strong guarantee</td></tr>
-    <tr><td>Memory budget reached (time window)</td><td>Degraded mode</td><td>Evict early + <strong>counter</strong> + log</td></tr>
-    <tr><td>Clock went backwards</td><td>Caller bug</td><td>Throw <code>invalid_argument</code></td></tr>
-  </table>
-  <div class="box key" style="margin-top:14px">Every degradation must be <strong>observable</strong>. A component that silently weakens its guarantee is worse than one that fails loudly.</div>
-  <aside class="notes">
-    <p><span class="t">01:23</span></p>
-    <h4>Heuristic to teach</h4>
-    <p>Return values for outcomes the caller must routinely handle; exceptions (or <code>std::expected</code>) for conditions the caller usually cannot handle locally; asserts for internal bugs; counters/metrics for degradations that are acceptable but must be visible.</p>
-    <h4>Degraded mode is the MSc-level idea here</h4>
-    <p>The time-window version has a <code>max_entries</code> safeguard. When traffic exceeds the design, it must choose: (a) reject new events (back-pressure), (b) evict early (may miss duplicates), (c) grow (may OOM-kill the pod and lose <em>everything</em>). Option (c) is the default behavior of "just use a hash set". The reference code picks (b) and exposes <code>early_evictions()</code> so dashboards can alert.</p>
-    <h4>Transition to break</h4>
-    <p>"After the break you will design this component yourselves. Take 10 minutes."</p>
-  </aside>
+<h2>Representation and its invariants</h2>
+<div class="cols wide-r">
+<div class="small">
+<p><code>order_</code>: <code>std::list&lt;Key&gt;</code>, oldest at front<br/><code>index_</code>: <code>unordered_map&lt;Key, list::iterator&gt;</code></p>
+<h3>Invariants</h3>
+<ol>
+<li><code>size() ≤ capacity()</code></li>
+<li><code>order_</code> and <code>index_</code> hold the same key set</li>
+<li><code>index_[k]</code> points at the node holding <code>k</code></li>
+<li>each key appears once in <code>order_</code></li>
+<li>front of <code>order_</code> = oldest first-insertion</li>
+</ol>
+</div>
+<svg aria-label="hash index pointing into recency list" viewbox="0 0 620 330">
+<defs><marker id="a1" markerheight="7" markerwidth="7" orient="auto" refx="9" refy="5" viewbox="0 0 10 10"><path d="M0,0L10,5L0,10z" fill="#0b6e75"></path></marker></defs>
+<text fill="#46505e" font-size="17" x="10" y="22">index_ (hash map)</text>
+<g font-family="Consolas,monospace" font-size="18">
+<rect fill="#e3f1f2" height="42" stroke="#0b6e75" width="150" x="10" y="34"></rect><text x="24" y="61">"e91…"</text>
+<rect fill="#e3f1f2" height="42" stroke="#0b6e75" width="150" x="10" y="84"></rect><text x="24" y="111">"07c…"</text>
+<rect fill="#e3f1f2" height="42" stroke="#0b6e75" width="150" x="10" y="134"></rect><text x="24" y="161">"a3f…"</text>
+</g>
+<text fill="#46505e" font-size="17" x="40" y="326">order_ (list)   oldest → newest</text>
+<g font-family="Consolas,monospace" font-size="18">
+<rect fill="#fff" height="46" rx="6" stroke="#14304a" width="140" x="40" y="254"></rect><text x="58" y="283">"a3f…"</text>
+<rect fill="#fff" height="46" rx="6" stroke="#14304a" width="140" x="240" y="254"></rect><text x="258" y="283">"e91…"</text>
+<rect fill="#fff" height="46" rx="6" stroke="#14304a" width="140" x="440" y="254"></rect><text x="458" y="283">"07c…"</text>
+</g>
+<path d="M180,270 H240 M240,284 H180" stroke="#14304a" stroke-width="1.5"></path>
+<path d="M380,270 H440 M440,284 H380" stroke="#14304a" stroke-width="1.5"></path>
+<path d="M160,55 C330,70 330,200 310,252" fill="none" marker-end="url(#a1)" stroke="#0b6e75" stroke-width="2"></path>
+<path d="M160,105 C470,110 520,190 510,252" fill="none" marker-end="url(#a1)" stroke="#0b6e75" stroke-width="2"></path>
+<path d="M160,155 C120,190 110,220 110,252" fill="none" marker-end="url(#a1)" stroke="#0b6e75" stroke-width="2"></path>
+</svg>
+</div>
+
+</section>
+<section class="slide">
+<h2>Errors and observable behavior</h2>
+<table class="small">
+<tr><th>Situation</th><th>Normal or exceptional?</th><th>Mechanism</th></tr>
+<tr><td>Duplicate key</td><td>Normal, expected</td><td>Return value</td></tr>
+<tr><td>Erase missing key</td><td>Normal</td><td>Return <code>false</code></td></tr>
+<tr><td>Capacity 0 at construction</td><td>Configuration bug</td><td>Throw at startup (fail fast)</td></tr>
+<tr><td>Out of memory</td><td>Exceptional</td><td><code>std::bad_alloc</code>, strong guarantee</td></tr>
+<tr><td>Memory budget reached (time window)</td><td>Degraded mode</td><td>Evict early + <strong>counter</strong> + log</td></tr>
+<tr><td>Clock went backwards</td><td>Caller bug</td><td>Throw <code>invalid_argument</code></td></tr>
+</table>
+<div class="box key" style="margin-top:14px">Every degradation must be <strong>observable</strong>. A component that silently weakens its guarantee is worse than one that fails loudly.</div>
+
+</section>
+<section class="slide divider">
+<span class="kicker">01:30–01:40</span>
+<h1>Break — 10 minutes</h1>
+<p>After the break: design exercise in teams of 2–3.</p>
 </section>
 
 <section class="slide divider">
-  <span class="kicker">01:30–01:40</span>
-  <h1>Break — 10 minutes</h1>
-  <p>After the break: design exercise in teams of 2–3.</p>
+<span class="kicker">Part 4 · 01:40–02:15</span>
+<h1>Design exercise: RecentSet</h1>
+<p>A reusable "seen recently?" component for the ingestion team</p>
 </section>
-
-<!-- ============================ PART 4 ============================ -->
-<section class="slide divider">
-  <span class="kicker">Part 4 · 01:40–02:15</span>
-  <h1>Design exercise: RecentSet</h1>
-  <p>A reusable "seen recently?" component for the ingestion team</p>
-</section>
-
 <section class="slide">
-  <h2>Exercise brief (teams of 2–3, 25 minutes)</h2>
-  <div class="cols wide-l small">
-    <div>
-      <p>Design a component that answers <em>"has this event ID been seen recently?"</em> for the payments scenario (50k/s peak, 10-min retries, 2 GiB, p99 200 µs).</p>
-      <p>Produce on one page:</p>
-      <ol>
-        <li><strong>Expiration semantics</strong>: what does "recently" mean, precisely?</li>
-        <li><strong>API</strong>: signatures + edge-case behavior</li>
-        <li><strong>Representation</strong> and 3+ <strong>invariants</strong></li>
-        <li><strong>Memory</strong> estimate at peak, and what happens at 3× peak</li>
-        <li><strong>Complexity</strong> of each operation, incl. expiry cost</li>
-        <li><strong>Five tests</strong> that would catch real bugs</li>
-      </ol>
-    </div>
-    <div class="box q"><span class="label">Decisions you must make</span>
-      <ul class="xsmall">
-        <li>Count-based or time-based window?</li>
-        <li>Does a duplicate extend the window?</li>
-        <li>Who provides "now"?</li>
-        <li>When is expiry performed?</li>
-        <li>What happens when memory is full?</li>
-        <li>Exact, or approximate + fallback?</li>
-      </ul>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:40</span> Form teams quickly (neighbours). This is also a trial run for project teams — say so.</p>
-    <h4>Circulate and push on these points</h4>
-    <ul>
-      <li>If a team writes only signatures: "What does <code>false</code> mean? What happens at exactly t + 10 min?"</li>
-      <li>If they choose count-based: "What window in <em>time</em> does N cover at night and during a 3× spike?" (Plant from Part 1.)</li>
-      <li>If they call <code>std::chrono::steady_clock::now()</code> inside: "How do you test that an entry expires after 10 minutes? Wait 10 minutes?" → inject time as a parameter or inject a clock.</li>
-      <li>If they expire by scanning the whole map periodically: "30M entries every second?" → FIFO queue of (time, key) so expiry is amortised O(1) from the front, because insertion times are monotone.</li>
-      <li>If they forget memory: ask for bytes/entry for their representation.</li>
-    </ul>
-    <h4>Time check</h4>
-    <p>At 02:05 ask two teams with <em>different</em> semantics to present in 2 minutes each. Then the debrief slides.</p>
-  </aside>
-</section>
+<h2>Exercise brief (teams of 2–3, 25 minutes)</h2>
+<div class="cols wide-l small">
+<div>
+<p>Design a component that answers <em>"has this event ID been seen recently?"</em> for the payments scenario (50k/s peak, 10-min retries, 2 GiB, p99 200 µs).</p>
+<p>Produce on one page:</p>
+<ol>
+<li><strong>Expiration semantics</strong>: what does "recently" mean, precisely?</li>
+<li><strong>API</strong>: signatures + edge-case behavior</li>
+<li><strong>Representation</strong> and 3+ <strong>invariants</strong></li>
+<li><strong>Memory</strong> estimate at peak, and what happens at 3× peak</li>
+<li><strong>Complexity</strong> of each operation, incl. expiry cost</li>
+<li><strong>Five tests</strong> that would catch real bugs</li>
+</ol>
+</div>
+<div class="box q"><span class="label">Decisions you must make</span>
+<ul class="xsmall">
+<li>Count-based or time-based window?</li>
+<li>Does a duplicate extend the window?</li>
+<li>Who provides "now"?</li>
+<li>When is expiry performed?</li>
+<li>What happens when memory is full?</li>
+<li>Exact, or approximate + fallback?</li>
+</ul>
+</div>
+</div>
 
-<section class="slide">
-  <h2>Debrief: "recently" has at least four meanings</h2>
-  <table class="small">
-    <tr><th>Semantics</th><th>Bound on memory</th><th>Behaviour under a traffic spike</th></tr>
-    <tr><td>Last <em>N</em> distinct IDs</td><td>Fixed: N</td><td>Time coverage shrinks → missed duplicates</td></tr>
-    <tr><td>First seen within <em>W</em> (fixed window)</td><td>rate × W — unbounded</td><td>Memory grows → need a cap + degraded mode</td></tr>
-    <tr><td>Last seen within <em>W</em> (sliding)</td><td>rate × W, and retry storms keep IDs alive</td><td>Same, plus entries can live forever</td></tr>
-    <tr><td>Time window + hard cap</td><td>min(rate × W, cap)</td><td>Observable early evictions</td></tr>
-  </table>
-  <div class="box key" style="margin-top:14px">The data structure follows from the semantics — not the other way around. Choose the semantics with the product owner.</div>
-  <aside class="notes">
-    <p><span class="t">02:05</span></p>
-    <h4>Recommended answer for this scenario</h4>
-    <p>"First seen within W = 10 min, with a hard cap sized to the memory budget, early eviction counted and alerted, time injected by the caller". This is <code>RecentWindow</code> in <code>Instructor_Only/Lecture_01/recent_window.hpp</code> (tests in <code>recent_window_test.cpp</code>); release it after class.</p>
-    <p>Why first-seen rather than last-seen: the requirement is about retries of one original event within 10 minutes of its first arrival; extending on every duplicate lets a buggy upstream retrying forever pin entries indefinitely.</p>
-    <h4>Representation of the recommended answer</h4>
-    <ul>
-      <li><code>unordered_map&lt;Key, Time&gt;</code> for membership + a <code>deque&lt;(Time, Key)&gt;</code> in arrival order.</li>
-      <li>Because <code>now</code> is non-decreasing, expired entries are always at the deque front → expire by popping the front while <code>front.time + W ≤ now</code>. Amortised O(1) per call (each entry is pushed and popped once). But one call after a long idle gap may pop millions — a latency spike. Mitigation: bound the work per call (expire at most k entries per call) — another trade-off.</li>
-      <li>Invariants: map and deque hold the same keys; deque times non-decreasing; no entry older than W after any call; size ≤ cap.</li>
-    </ul>
-    <h4>Memory at peak and at 3×</h4>
-    <p>30M × (map node ~56 B with binary key + deque entry 24 B + bucket 8 B) ≈ 2.6 GB — over budget with a node-based map! Options: binary keys in a flat open-addressing table (~1 GB), or a smaller exact window + Bloom tier. At 3× peak the cap engages. This is a genuinely hard problem; praise teams that noticed it.</p>
-  </aside>
 </section>
-
 <section class="slide">
-  <h2>Debrief: design decisions that make testing possible</h2>
-  <div class="cols">
-    <pre class="sm"><code>// Time is an input, not read inside.
+<h2>Debrief: "recently" has at least four meanings</h2>
+<table class="small">
+<tr><th>Semantics</th><th>Bound on memory</th><th>Behaviour under a traffic spike</th></tr>
+<tr><td>Last <em>N</em> distinct IDs</td><td>Fixed: N</td><td>Time coverage shrinks → missed duplicates</td></tr>
+<tr><td>First seen within <em>W</em> (fixed window)</td><td>rate × W — unbounded</td><td>Memory grows → need a cap + degraded mode</td></tr>
+<tr><td>Last seen within <em>W</em> (sliding)</td><td>rate × W, and retry storms keep IDs alive</td><td>Same, plus entries can live forever</td></tr>
+<tr><td>Time window + hard cap</td><td>min(rate × W, cap)</td><td>Observable early evictions</td></tr>
+</table>
+<div class="box key" style="margin-top:14px">The data structure follows from the semantics — not the other way around. Choose the semantics with the product owner.</div>
+
+</section>
+<section class="slide">
+<h2>Debrief: design decisions that make testing possible</h2>
+<div class="cols">
+<pre class="sm"><code>// Time is an input, not read inside.
 bool seen_or_insert(const Key&amp; k,
                     Time now);
 
@@ -590,362 +369,242 @@ auto t0 = Time{};
 assert(!w.seen_or_insert(7, t0));
 assert( w.seen_or_insert(7, t0 + 9s));
 assert(!w.seen_or_insert(7, t0 + 10s));</code></pre>
-    <div class="small">
-      <ul>
-        <li><strong>Injected time</strong> → deterministic tests, replayable production logs.</li>
-        <li><strong>Half-open window</strong> <code>[t, t+W)</code> stated in the contract, tested at the boundary.</li>
-        <li><strong>Non-decreasing time</strong> is a precondition — checked, not assumed.</li>
-        <li><strong>Counters</strong> (<code>early_evictions()</code>) make degradation testable, not just loggable.</li>
-      </ul>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">02:10</span></p>
-    <h4>Say</h4>
-    <p>"Testability is a design property, not something you add after. The single decision 'pass time in' made the component deterministic, testable without sleeping, and replayable."</p>
-    <h4>Ask: what five tests did your team write? Compare with this list</h4>
-    <ol>
-      <li>Boundary: exactly at t+W (off-by-one in <code>&lt;</code> vs <code>≤</code> is the most common bug).</li>
-      <li>Duplicate does not extend the window (the semantics test).</li>
-      <li>Cap reached: oldest dropped early, counter incremented, missed duplicate is the documented consequence.</li>
-      <li>Time going backwards → rejected (multi-threaded callers or NTP adjustments cause this in practice; that is why <code>steady_clock</code>, not <code>system_clock</code>).</li>
-      <li>Differential randomized test vs a naive reference (store all (key, time) pairs, answer by scanning) — catches everything else.</li>
-    </ol>
-    <h4>Transition</h4>
-    <p>"Tests and benchmarks are the two kinds of evidence. Let us be precise about both."</p>
-  </aside>
+<div class="small">
+<ul>
+<li><strong>Injected time</strong> → deterministic tests, replayable production logs.</li>
+<li><strong>Half-open window</strong> <code>[t, t+W)</code> stated in the contract, tested at the boundary.</li>
+<li><strong>Non-decreasing time</strong> is a precondition — checked, not assumed.</li>
+<li><strong>Counters</strong> (<code>early_evictions()</code>) make degradation testable, not just loggable.</li>
+</ul>
+</div>
+</div>
+
 </section>
 
-<!-- ============================ PART 5 ============================ -->
 <section class="slide divider">
-  <span class="kicker">Part 5 · 02:15–02:30</span>
-  <h1>Evidence: tests, benchmarks, reproducibility</h1>
+<span class="kicker">Part 5 · 02:15–02:30</span>
+<h1>Evidence: tests, benchmarks, reproducibility</h1>
 </section>
-
 <section class="slide">
-  <h2>Testing a data structure: four layers</h2>
-  <table class="small">
-    <tr><th>Layer</th><th>Catches</th><th>In <code>recent_set_test.cpp</code></th></tr>
-    <tr><td>Contract / example tests</td><td>Wrong semantics, boundary off-by-one</td><td>capacity 2, eviction order, duplicate no-refresh</td></tr>
-    <tr><td>Differential (vs. simple reference model)</td><td>Everything the examples didn't think of</td><td>200 random sequences vs vector baseline</td></tr>
-    <tr><td>Invariant checking after each step</td><td>Corruption before it becomes visible</td><td><code>check_invariants()</code> every operation</td></tr>
-    <tr><td>Sanitizers (ASan, UBSan)</td><td>Dangling iterators, overflow, UB</td><td><code>-fsanitize=address,undefined</code></td></tr>
-  </table>
-  <div class="box key" style="margin-top:14px">A slow, obviously-correct implementation is an asset: it is your <strong>test oracle</strong> and your <strong>benchmark baseline</strong>.</div>
-  <aside class="notes">
-    <p><span class="t">02:15</span></p>
-    <h4>Key ideas</h4>
-    <ul>
-      <li><strong>Differential testing</strong>: run the same random operation sequence on the real implementation and a reference model; compare every result. Use a <em>small key space</em> (e.g. 12 keys) so duplicates, evictions and erasures happen constantly — uniform 64-bit keys would never collide and would test almost nothing.</li>
-      <li><strong>Fixed seed</strong>: a failure must be reproducible. Print the seed/trial/step on failure (the test file does).</li>
-      <li><strong>Shrinking</strong> (property-based testing tools like RapidCheck do this): reduce a failing sequence to the minimal one. Mention; not required.</li>
-    </ul>
-    <h4>Optional live demo (3 min)</h4>
-    <p>In <code>recent_set.hpp</code>, change <code>order_.push_back(k)</code> to <code>order_.push_front(k)</code> and run the tests. The contract tests and the differential test both fail and print the trial. Revert.</p>
-    <h4>Misconception</h4>
-    <p>"Code coverage 100% means tested." Coverage says lines ran, not that the results were checked, nor that the interesting <em>states</em> (full, one-below-full, after erase then add) were reached.</p>
-  </aside>
-</section>
+<h2>Testing a data structure: four layers</h2>
+<table class="small">
+<tr><th>Layer</th><th>Catches</th><th>In <code>recent_set_test.cpp</code></th></tr>
+<tr><td>Contract / example tests</td><td>Wrong semantics, boundary off-by-one</td><td>capacity 2, eviction order, duplicate no-refresh</td></tr>
+<tr><td>Differential (vs. simple reference model)</td><td>Everything the examples didn't think of</td><td>200 random sequences vs vector baseline</td></tr>
+<tr><td>Invariant checking after each step</td><td>Corruption before it becomes visible</td><td><code>check_invariants()</code> every operation</td></tr>
+<tr><td>Sanitizers (ASan, UBSan)</td><td>Dangling iterators, overflow, UB</td><td><code>-fsanitize=address,undefined</code></td></tr>
+</table>
+<div class="box key" style="margin-top:14px">A slow, obviously-correct implementation is an asset: it is your <strong>test oracle</strong> and your <strong>benchmark baseline</strong>.</div>
 
+</section>
 <section class="slide">
-  <h2>Benchmarks: what does our table actually show?</h2>
-  <div class="cols">
-    <div class="card small"><h3>It shows</h3>
-      <ul><li>On one machine, one compiler, uint64 keys, 1% duplicates, the list+map design has roughly flat mean cost; the vector's grows with capacity</li>
-      <li>A crossover exists, somewhere between 16 and 256 on that setup</li></ul></div>
-    <div class="card small"><h3>It does not show</h3>
-      <ul><li>Variance, confidence, or tail latency (only means)</li>
-      <li>Behavior with 36-byte string keys</li>
-      <li>Memory usage</li>
-      <li>Performance under concurrency</li>
-      <li>Anything about 30M entries</li></ul></div>
-  </div>
-  <div class="box q" style="margin-top:16px"><span class="label">Ask</span>Name three threats to validity and one experiment that would remove each.</div>
-  <aside class="notes">
-    <p><span class="t">02:20</span></p>
-    <h4>Threats to validity (expected answers)</h4>
-    <ul>
-      <li><strong>Single run</strong> → repeat ≥ 10 times, report median and spread (IQR or 95% CI).</li>
-      <li><strong>Mean hides tails</strong> → time individual ops (or batches) and report p50/p99/p99.9.</li>
-      <li><strong>Unrepresentative keys</strong> → use real UUID strings or a trace.</li>
-      <li><strong>Warm-up / frequency scaling / other processes</strong> → warm-up iterations, pin CPU governor, quiet machine, report the machine.</li>
-      <li><strong>Dead-code elimination</strong> → the harness sums results into a checksum and prints it; show them that line.</li>
-      <li><strong>Construction time excluded / included</strong> → state what is timed.</li>
-      <li><strong>Small n</strong> → the design target is 30M; measure there, or explain why you can extrapolate.</li>
-    </ul>
-    <h4>Say</h4>
-    <p>"In this course, every benchmark you show must come with two lists: what it demonstrates and what it does not. That is 4 of the 20 project marks." Week 12 is a full lecture on methodology; until then, these habits are enough.</p>
-  </aside>
-</section>
+<h2>Benchmarks: what does our table actually show?</h2>
+<div class="cols">
+<div class="card small"><h3>It shows</h3>
+<ul><li>On one machine, one compiler, uint64 keys, 1% duplicates, the list+map design has roughly flat mean cost; the vector's grows with capacity</li>
+<li>A crossover exists, somewhere between 16 and 256 on that setup</li></ul></div>
+<div class="card small"><h3>It does not show</h3>
+<ul><li>Variance, confidence, or tail latency (only means)</li>
+<li>Behavior with 36-byte string keys</li>
+<li>Memory usage</li>
+<li>Performance under concurrency</li>
+<li>Anything about 30M entries</li></ul></div>
+</div>
+<div class="box q" style="margin-top:16px"><span class="label">Ask</span>Name three threats to validity and one experiment that would remove each.</div>
 
+</section>
 <section class="slide">
-  <h2>Reproducibility and maintainability</h2>
-  <div class="cols small">
-    <div>
-      <h3>Reproducible means a reviewer can…</h3>
-      <ul>
-        <li>build with one documented command</li>
-        <li>run tests with one command</li>
-        <li>regenerate every figure from raw data with one script</li>
-        <li>see machine, compiler, flags, seed, commit hash</li>
-      </ul>
-    </div>
-    <div>
-      <h3>Maintainable means a newcomer can…</h3>
-      <ul>
-        <li>find the contract without reading the implementation</li>
-        <li>find the invariants and where they are checked</li>
-        <li>change the representation without breaking callers</li>
-        <li>read why alternatives were rejected (decision records)</li>
-      </ul>
-    </div>
-  </div>
-  <pre class="sm"><code>README.md  include/  src/  tests/  bench/  results/  docs/decisions/  scripts/</code></pre>
-  <aside class="notes">
-    <p><span class="t">02:25</span></p>
-    <h4>Say</h4>
-    <p>"This is the required repository layout for your project; it is in <code>03_Project/project.md</code>. <code>results/</code> holds raw CSV, not just pretty plots — a plot without the data is an assertion."</p>
-    <h4>Decision records (ADRs)</h4>
-    <p>A short file per significant decision: context, options, decision, consequences. One page each. Example: "ADR-003: dedup window is first-seen, not last-seen". Future maintainers (and examiners) read these first.</p>
-    <h4>Transition</h4>
-    <p>"Now: how all of this is assessed. This is the part you must not miss."</p>
-  </aside>
+<h2>Reproducibility and maintainability</h2>
+<div class="cols small">
+<div>
+<h3>Reproducible means a reviewer can…</h3>
+<ul>
+<li>build with one documented command</li>
+<li>run tests with one command</li>
+<li>regenerate every figure from raw data with one script</li>
+<li>see machine, compiler, flags, seed, commit hash</li>
+</ul>
+</div>
+<div>
+<h3>Maintainable means a newcomer can…</h3>
+<ul>
+<li>find the contract without reading the implementation</li>
+<li>find the invariants and where they are checked</li>
+<li>change the representation without breaking callers</li>
+<li>read why alternatives were rejected (decision records)</li>
+</ul>
+</div>
+</div>
+<pre class="sm"><code>README.md  include/  src/  tests/  bench/  results/  docs/decisions/  scripts/</code></pre>
+
 </section>
 
-<!-- ============================ PART 6 ============================ -->
 <section class="slide divider">
-  <span class="kicker">Part 6 · 02:30–03:00</span>
-  <h1>The course: structure, assessment,<br>project and deadlines</h1>
+<span class="kicker">Part 6 · 02:30–03:00</span>
+<h1>The course: structure, assessment,<br/>project and deadlines</h1>
 </section>
-
 <section class="slide">
-  <h2>14 weeks, one engineering question</h2>
-  <table class="tight xsmall">
-    <tr><th>Wk</th><th>Date</th><th>Topic</th><th>Wk</th><th>Date</th><th>Topic</th></tr>
-    <tr><td>1</td><td>26 Sep</td><td>Data Structures as Software Products</td><td>8</td><td>14 Nov</td><td>Workflow Engines, DAGs, Failure and Recovery</td></tr>
-    <tr><td>2</td><td>03 Oct</td><td>Production Hash Maps</td><td>9</td><td>21 Nov</td><td>Persistent Data Structures, Versioned Systems</td></tr>
-    <tr><td>3</td><td>10 Oct</td><td>Caching Systems: LRU, LFU, Workloads</td><td>10</td><td>28 Nov</td><td>Probabilistic Data Structures</td></tr>
-    <tr><td>4</td><td>17 Oct</td><td>Tries and Autocomplete Systems</td><td>11</td><td>05 Dec</td><td>Concurrency, Memory, Hardware-Aware DS</td></tr>
-    <tr><td>5</td><td>24 Oct</td><td>Search Systems and Inverted Indexes</td><td>12</td><td>12 Dec</td><td>Benchmarking, Profiling, Experimental Method</td></tr>
-    <tr><td>6</td><td>31 Oct</td><td>Range Queries, Workload-Driven Design</td><td>13</td><td>19 Dec</td><td>Design Reviews / Project Defenses</td></tr>
-    <tr><td>7</td><td>07 Nov</td><td><strong>Midterm</strong> + Dependency Graph Engineering</td><td>14</td><td>26 Dec</td><td>Defenses + Synthesis + Exam Preparation</td></tr>
-  </table>
-  <p class="small" style="margin-top:12px">All sessions Saturday, 3 hours. Each week has a distinct engineering lesson — see <code>00_Course_Information/schedule.md</code>.</p>
-  <aside class="notes">
-    <p><span class="t">02:30</span></p>
-    <h4>Say briefly per block</h4>
-    <ul>
-      <li>Weeks 2–6: single-node structures where the <strong>workload</strong> decides (hashing, caching, prefix search, inverted indexes, range queries).</li>
-      <li>Weeks 7–8: graphs as <strong>system infrastructure</strong> (dependency resolution, workflows) — where error reporting and failure semantics dominate.</li>
-      <li>Weeks 9–11: <strong>changing the rules</strong> — immutability, probability, concurrency and hardware.</li>
-      <li>Week 12: methodology — how to produce credible evidence. It is late on purpose: by then you have results worth scrutinising, just before the testing/benchmarking checkpoint feedback is applied.</li>
-      <li>Weeks 13–14: defenses.</li>
-    </ul>
-    <p>Keep this to 3 minutes.</p>
-  </aside>
-</section>
+<h2>14 weeks, one engineering question</h2>
+<table class="tight xsmall">
+<tr><th>Wk</th><th>Date</th><th>Topic</th><th>Wk</th><th>Date</th><th>Topic</th></tr>
+<tr><td>1</td><td>26 Sep</td><td>Data Structures as Software Products</td><td>8</td><td>14 Nov</td><td>Workflow Engines, DAGs, Failure and Recovery</td></tr>
+<tr><td>2</td><td>03 Oct</td><td>Production Hash Maps</td><td>9</td><td>21 Nov</td><td>Persistent Data Structures, Versioned Systems</td></tr>
+<tr><td>3</td><td>10 Oct</td><td>Caching Systems: LRU, LFU, Workloads</td><td>10</td><td>28 Nov</td><td>Probabilistic Data Structures</td></tr>
+<tr><td>4</td><td>17 Oct</td><td>Tries and Autocomplete Systems</td><td>11</td><td>05 Dec</td><td>Concurrency, Memory, Hardware-Aware DS</td></tr>
+<tr><td>5</td><td>24 Oct</td><td>Search Systems and Inverted Indexes</td><td>12</td><td>12 Dec</td><td>Benchmarking, Profiling, Experimental Method</td></tr>
+<tr><td>6</td><td>31 Oct</td><td>Range Queries, Workload-Driven Design</td><td>13</td><td>19 Dec</td><td>Design Reviews / Project Defenses</td></tr>
+<tr><td>7</td><td>07 Nov</td><td><strong>Midterm</strong> + Dependency Graph Engineering</td><td>14</td><td>26 Dec</td><td>Defenses + Synthesis + Exam Preparation</td></tr>
+</table>
+<p class="small" style="margin-top:12px">All sessions Saturday, 3 hours. Each week has a distinct engineering lesson — see <code>00_Course_Information/schedule.md</code>.</p>
 
+</section>
 <section class="slide">
-  <h2>Assessment: 40 coursework + 60 final = 100</h2>
-  <table>
-    <tr><th>Component</th><th>Who</th><th>When</th><th class="num">Marks</th></tr>
-    <tr><td>Written Midterm (90 min)</td><td>Individual</td><td>Sat 07 Nov</td><td class="num">10</td></tr>
-    <tr><td>Semester Engineering Project</td><td>Team of 2–3</td><td>Freeze Sat 19 Dec, 09:00 Cairo</td><td class="num">20</td></tr>
-    <tr><td>Engineering Analysis Assignment</td><td>Individual</td><td>Due Sat 12 Dec</td><td class="num">5</td></tr>
-    <tr><td>Presentation (2) + Individual Viva (3)</td><td>Team + individual</td><td>Sat 19 &amp; 26 Dec</td><td class="num">5</td></tr>
-    <tr class="hl"><td>Coursework</td><td></td><td></td><td class="num">40</td></tr>
-    <tr><td>Final examination (written)</td><td>Individual</td><td>Faculty exam period</td><td class="num">60</td></tr>
-    <tr class="hl"><td>Total</td><td></td><td></td><td class="num">100</td></tr>
-  </table>
-  <p class="small muted" style="margin-top:10px">Individual work = 10 + 5 + 3 + 60 = 78 of 100 marks. Team work alone cannot pass the course.</p>
-  <aside class="notes">
-    <p><span class="t">02:33</span></p>
-    <h4>Emphasise</h4>
-    <ul>
-      <li>78 marks are individually earned (midterm 10, analysis 5, viva 3, final 60). The team project is 20 + 2 (team presentation).</li>
-      <li>The viva exists so that team marks reflect understanding: every student will be asked about parts they did not write.</li>
-      <li>Deadlines are 23:59 Cairo time on the stated Saturday, except the final freeze at 09:00 on 19 Dec (before the first defense session).</li>
-      <li>Details and rubrics: <code>00_Course_Information/assessment.md</code> (on Classroom).</li>
-    </ul>
-    <h4>Likely question: "What does the final look like?"</h4>
-    <p>Answer: written, 60 marks, three sections — A: 12 scenario-based objective questions (12), B: 4 analytical engineering questions (24), C: 2 engineering case studies (24). Reasoning, not memorisation. Sample question styles are shared in Week 12. Blueprint: <code>02_Assessments/Final_Exam_Blueprint.md</code>.</p>
-  </aside>
-</section>
+<h2>Assessment: 40 coursework + 60 final = 100</h2>
+<table>
+<tr><th>Component</th><th>Who</th><th>When</th><th class="num">Marks</th></tr>
+<tr><td>Written Midterm (90 min)</td><td>Individual</td><td>Sat 07 Nov</td><td class="num">10</td></tr>
+<tr><td>Semester Engineering Project</td><td>Team of 2–3</td><td>Freeze Sat 19 Dec, 09:00 Cairo</td><td class="num">20</td></tr>
+<tr><td>Engineering Analysis Assignment</td><td>Individual</td><td>Due Sat 12 Dec</td><td class="num">5</td></tr>
+<tr><td>Presentation (2) + Individual Viva (3)</td><td>Team + individual</td><td>Sat 19 &amp; 26 Dec</td><td class="num">5</td></tr>
+<tr class="hl"><td>Coursework</td><td></td><td></td><td class="num">40</td></tr>
+<tr><td>Final examination (written)</td><td>Individual</td><td>Faculty exam period</td><td class="num">60</td></tr>
+<tr class="hl"><td>Total</td><td></td><td></td><td class="num">100</td></tr>
+</table>
+<p class="small muted" style="margin-top:10px">Individual work = 10 + 5 + 3 + 60 = 78 of 100 marks. Team work alone cannot pass the course.</p>
 
+</section>
 <section class="slide">
-  <h2>Midterm (10) and Engineering Analysis (5)</h2>
-  <div class="cols small">
-    <div class="card">
-      <h3>Written midterm — Sat 07 Nov, 90 min</h3>
-      <p>Weeks 1–6. 90 minutes. Permitted Materials: Closed book; no notes permitted. Five 2-mark questions:</p>
-      <ol class="xsmall">
-        <li>Workload analysis</li><li>API, contracts, invariants</li><li>Design trade-offs</li><li>Testing reasoning</li><li>Interpreting performance evidence</li>
-      </ol>
-      <p class="xsmall">Not recall. Today's exercise is a fair example.</p>
-    </div>
-    <div class="card">
-      <h3>Engineering Analysis — due Sat 12 Dec</h3>
-      <p>Individual, ~1500–2000 words. Released 14 Nov. Critically evaluate a design decision, performance claim, or competing designs for a given workload. Not a programming task.</p>
-      <table class="tight xsmall"><tr><td>Problem formulation</td><td class="num">1</td></tr><tr><td>Alternatives considered</td><td class="num">1</td></tr><tr><td>Quality of reasoning</td><td class="num">1</td></tr><tr><td>Evidence / experimental thinking</td><td class="num">1</td></tr><tr><td>Limitations / critical evaluation</td><td class="num">1</td></tr></table>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">02:37</span></p>
-    <h4>Midterm example to read aloud</h4>
-    <p>"A team reports 'OurMap is 3.1× faster than std::unordered_map' from mean times at n = 1000, 10 runs, integer keys 0..999. Give three reasons the claim is not supported and the experiment that would support or refute it." — this is a 2-mark question in the style of Q5.</p>
-    <h4>Engineering analysis</h4>
-    <p>The analysis must be on a topic different from the student's own project structure (prevents recycling project text). Scenarios are released 14 Nov. Midterm: closed book; no notes permitted.</p>
-  </aside>
-</section>
+<h2>Midterm (10) and Engineering Analysis (5)</h2>
+<div class="cols small">
+<div class="card">
+<h3>Written midterm — Sat 07 Nov, 90 min</h3>
+<p>Weeks 1–6. 90 minutes. Permitted Materials: Closed book; no notes permitted. Five 2-mark questions:</p>
+<ol class="xsmall">
+<li>Workload analysis</li><li>API, contracts, invariants</li><li>Design trade-offs</li><li>Testing reasoning</li><li>Interpreting performance evidence</li>
+</ol>
+<p class="xsmall">Not recall. Today's exercise is a fair example.</p>
+</div>
+<div class="card">
+<h3>Engineering Analysis — due Sat 12 Dec</h3>
+<p>Individual, ~1500–2000 words. Released 14 Nov. Critically evaluate a design decision, performance claim, or competing designs for a given workload. Not a programming task.</p>
+<table class="tight xsmall"><tr><td>Problem formulation</td><td class="num">1</td></tr><tr><td>Alternatives considered</td><td class="num">1</td></tr><tr><td>Quality of reasoning</td><td class="num">1</td></tr><tr><td>Evidence / experimental thinking</td><td class="num">1</td></tr><tr><td>Limitations / critical evaluation</td><td class="num">1</td></tr></table>
+</div>
+</div>
 
+</section>
 <section class="slide">
-  <h2>The project: solve a problem, not "implement X"</h2>
-  <div class="cols">
-    <div class="box bad"><span class="label">Not acceptable</span>"We will implement a Trie."</div>
-    <div class="box good"><span class="label">Engineering framing</span>"We will design an autocomplete subsystem for a 2M-term catalogue under a 5 ms p99 / 300 MB budget and determine whether a trie is justified over a sorted array."</div>
-  </div>
-  <p class="small">Every project needs: a concrete user · a quantified workload · measurable constraints · <strong>≥ 2 candidate designs + a simple baseline</strong> · explicit invariants · an experiment whose outcome you did not know in advance.</p>
-  <div class="box key small">A well-measured negative result ("the trie did not justify its memory") earns the same marks as a positive one.</div>
-  <aside class="notes">
-    <p><span class="t">02:42</span></p>
-    <h4>Say</h4>
-    <p>"Your project is graded on the quality of the decision and the evidence, not on how advanced the structure sounds. A team that carefully shows a sorted vector beats their trie for their workload, and explains why, can get full marks."</p>
-    <h4>Starting points</h4>
-    <p><code>03_Project/project_options.md</code> lists domains (search, caching, autocomplete, dependency resolution, workflow, versioned store, dedup, range analytics, key-value storage, scheduling, log analytics, access control). They are domains, not titles.</p>
-    <h4>Warn</h4>
-    <p>Teams that pick a topic because "it is easy to implement" usually struggle to produce an interesting experiment. Pick a problem where you genuinely don't know which design wins.</p>
-  </aside>
-</section>
+<h2>The project: solve a problem, not "implement X"</h2>
+<div class="cols">
+<div class="box bad"><span class="label">Not acceptable</span>"We will implement a Trie."</div>
+<div class="box good"><span class="label">Engineering framing</span>"We will design an autocomplete subsystem for a 2M-term catalogue under a 5 ms p99 / 300 MB budget and determine whether a trie is justified over a sorted array."</div>
+</div>
+<p class="small">Every project needs: a concrete user · a quantified workload · measurable constraints · <strong>≥ 2 candidate designs + a simple baseline</strong> · explicit invariants · an experiment whose outcome you did not know in advance.</p>
+<div class="box key small">A well-measured negative result ("the trie did not justify its memory") earns the same marks as a positive one.</div>
 
+</section>
 <section class="slide">
-  <h2>Project rubric — 20 marks</h2>
-  <div class="cols wide-l">
-    <table class="small">
-      <tr><th>Criterion</th><th class="num">Marks</th></tr>
-      <tr><td>Problem formulation and requirements</td><td class="num">2</td></tr>
-      <tr><td>Architecture / API / design decisions</td><td class="num">3</td></tr>
-      <tr><td>Implementation quality</td><td class="num">5</td></tr>
-      <tr><td>Testing</td><td class="num">3</td></tr>
-      <tr><td>Benchmarking / experimental evidence</td><td class="num">4</td></tr>
-      <tr><td>Documentation / reproducibility</td><td class="num">2</td></tr>
-      <tr><td>Engineering maturity / limitations</td><td class="num">1</td></tr>
-      <tr class="hl"><td>Total</td><td class="num">20</td></tr>
-    </table>
-    <div class="small">
-      <p>You will be asked:</p>
-      <ul class="xsmall">
-        <li>Why this design? What did you reject, on what evidence?</li>
-        <li>Which assumption, if false, hurts most?</li>
-        <li>Under what workload would another solution win?</li>
-        <li>Which invariants hold, and where are they maintained?</li>
-        <li>What does each benchmark <em>not</em> demonstrate?</li>
-        <li>What changes at 100× scale, or under concurrency?</li>
-      </ul>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">02:45</span></p>
-    <h4>Point out</h4>
-    <p>Testing (3) + Benchmarking (4) = 7 marks for evidence, more than implementation (5). This is deliberate. Documentation/reproducibility (2): if I cannot rebuild and rerun your benchmark from the README, the benchmark marks are at risk too.</p>
-    <p>Descriptors for each level (Excellent / Good / Developing / Insufficient) are in <code>assessment.md</code>; tell students to read them before writing the proposal.</p>
-  </aside>
-</section>
+<h2>Project rubric — 20 marks</h2>
+<div class="cols wide-l">
+<table class="small">
+<tr><th>Criterion</th><th class="num">Marks</th></tr>
+<tr><td>Problem formulation and requirements</td><td class="num">2</td></tr>
+<tr><td>Architecture / API / design decisions</td><td class="num">3</td></tr>
+<tr><td>Implementation quality</td><td class="num">5</td></tr>
+<tr><td>Testing</td><td class="num">3</td></tr>
+<tr><td>Benchmarking / experimental evidence</td><td class="num">4</td></tr>
+<tr><td>Documentation / reproducibility</td><td class="num">2</td></tr>
+<tr><td>Engineering maturity / limitations</td><td class="num">1</td></tr>
+<tr class="hl"><td>Total</td><td class="num">20</td></tr>
+</table>
+<div class="small">
+<p>You will be asked:</p>
+<ul class="xsmall">
+<li>Why this design? What did you reject, on what evidence?</li>
+<li>Which assumption, if false, hurts most?</li>
+<li>Under what workload would another solution win?</li>
+<li>Which invariants hold, and where are they maintained?</li>
+<li>What does each benchmark <em>not</em> demonstrate?</li>
+<li>What changes at 100× scale, or under concurrency?</li>
+</ul>
+</div>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Presentation + viva — 5 marks</h2>
-  <div class="cols small">
-    <div class="card"><h3>Team presentation / demo — 2</h3>
-      <p>12 minutes: problem → decision → evidence → limitations. Live: run tests and one benchmark from the tagged release.</p>
-      <p class="muted">Slide polish is not graded.</p></div>
-    <div class="card"><h3>Individual viva — 3</h3>
-      <p>~8 minutes per student. Examples:</p>
-      <ul class="xsmall">
-        <li>Show where your most important invariant is maintained.</li>
-        <li>Which benchmark result do you trust least?</li>
-        <li>Explain a component written mainly by a teammate.</li>
-        <li>What would you redesign if the input grew 100×?</li>
-      </ul></div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">02:48</span></p>
-    <h4>Say plainly</h4>
-    <p>"The viva is where I check that your team mark is your mark. If you cannot explain your team's hash function or benchmark harness, your viva mark will show it, even if the project is excellent. Divide work, but review each other's code."</p>
-    <p>Defenses: Sat 19 Dec (session 1) and Sat 26 Dec (remaining). Slot allocation published in Week 12.</p>
-  </aside>
-</section>
+<h2>Presentation + viva — 5 marks</h2>
+<div class="cols small">
+<div class="card"><h3>Team presentation / demo — 2</h3>
+<p>12 minutes: problem → decision → evidence → limitations. Live: run tests and one benchmark from the tagged release.</p>
+<p class="muted">Slide polish is not graded.</p></div>
+<div class="card"><h3>Individual viva — 3</h3>
+<p>~8 minutes per student. Examples:</p>
+<ul class="xsmall">
+<li>Show where your most important invariant is maintained.</li>
+<li>Which benchmark result do you trust least?</li>
+<li>Explain a component written mainly by a teammate.</li>
+<li>What would you redesign if the input grew 100×?</li>
+</ul></div>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Deadlines — put these in your calendar now</h2>
-  <table class="small">
-    <tr><th>Date (Saturday)</th><th>Milestone</th></tr>
-    <tr><td>26 Sep</td><td>Course + project brief released (today)</td></tr>
-    <tr class="hl"><td>03 Oct</td><td>Team formation + preliminary topic (in class)</td></tr>
-    <tr class="hl"><td>17 Oct</td><td>Project proposal due</td></tr>
-    <tr><td>31 Oct</td><td>Architecture / design / API document due</td></tr>
-    <tr><td>07 Nov</td><td>Written midterm</td></tr>
-    <tr><td>21 Nov</td><td>Working implementation / prototype checkpoint</td></tr>
-    <tr><td>05 Dec</td><td>Testing + benchmarking checkpoint</td></tr>
-    <tr><td>12 Dec</td><td>Individual Engineering Analysis due</td></tr>
-    <tr><td>19 Dec</td><td>Final repository freeze (09:00 Cairo) + defense session 1</td></tr>
-    <tr><td>26 Dec</td><td>Remaining defenses + course synthesis</td></tr>
-  </table>
-  <aside class="notes">
-    <p><span class="t">02:51</span></p>
-    <h4>Milestone policy (say explicitly)</h4>
-    <p>Intermediate milestones are progress controls: they receive written feedback and are <strong>not separately graded</strong>; the 20 project marks are awarded once, on the frozen repository. But: a missed milestone is recorded and discussed at the viva, and teams that skip checkpoints lose the feedback that protects their final mark.</p>
-    <p>Deadlines 23:59 Cairo time unless stated. Submission = push to repo + turn in on Classroom with the commit hash.</p>
-  </aside>
-</section>
+<h2>Deadlines — put these in your calendar now</h2>
+<table class="small">
+<tr><th>Date (Saturday)</th><th>Milestone</th></tr>
+<tr><td>26 Sep</td><td>Course + project brief released (today)</td></tr>
+<tr class="hl"><td>03 Oct</td><td>Team formation + preliminary topic (in class)</td></tr>
+<tr class="hl"><td>17 Oct</td><td>Project proposal due</td></tr>
+<tr><td>31 Oct</td><td>Architecture / design / API document due</td></tr>
+<tr><td>07 Nov</td><td>Written midterm</td></tr>
+<tr><td>21 Nov</td><td>Working implementation / prototype checkpoint</td></tr>
+<tr><td>05 Dec</td><td>Testing + benchmarking checkpoint</td></tr>
+<tr><td>12 Dec</td><td>Individual Engineering Analysis due</td></tr>
+<tr><td>19 Dec</td><td>Final repository freeze (09:00 Cairo) + defense session 1</td></tr>
+<tr><td>26 Dec</td><td>Remaining defenses + course synthesis</td></tr>
+</table>
 
+</section>
 <section class="slide">
-  <h2>Before next Saturday (03 Oct)</h2>
-  <div class="cols small">
-    <div>
-      <h3>Team formation</h3>
-      <ul>
-        <li>Teams of 2–3. Solo only with written approval.</li>
-        <li>Bring to class: names, IDs, repo URL, a one-paragraph problem statement.</li>
-        <li>Unassigned students will be grouped in class on 03 Oct.</li>
-      </ul>
-      <h3>Prepare for Lecture 2</h3>
-      <ul>
-        <li>Read the <code>std::unordered_map</code> reference: complexity, <code>rehash</code>, iterator invalidation</li>
-        <li>Build and run <code>Student_Resources/recent_set_test.cpp</code> with sanitizers</li>
-      </ul>
-    </div>
-    <div class="box plain">
-      <span class="label">MSc expectations</span>
-      <ul class="xsmall">
-        <li>Claims come with evidence and stated assumptions.</li>
-        <li>"It depends" is the start of an answer; say <em>on what</em>, and <em>how much</em>.</li>
-        <li>Declare AI assistance and external code in <code>ACKNOWLEDGEMENTS.md</code>; you must be able to explain every line.</li>
-        <li>Fabricated benchmark data is academic misconduct.</li>
-      </ul>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">02:55</span></p>
-    <h4>AI policy — say it directly</h4>
-    <p>AI tools are allowed with declaration. The viva is designed so that code a student cannot explain earns nothing. "Generated by a tool and verified by these tests" is an acceptable declaration; silence is not.</p>
-    <h4>Exit question (last 2 minutes)</h4>
-    <p>Ask each student to write on paper: "One assumption in today's dedup problem that, if wrong, would change the design the most." Collect or have them post on Classroom. Good answers: the retry window length, the duplicate cost (payments vs analytics), traffic peak, key format, restart guarantees.</p>
-  </aside>
-</section>
+<h2>Before next Saturday (03 Oct)</h2>
+<div class="cols small">
+<div>
+<h3>Team formation</h3>
+<ul>
+<li>Teams of 2–3. Solo only with written approval.</li>
+<li>Bring to class: names, IDs, repo URL, a one-paragraph problem statement.</li>
+<li>Unassigned students will be grouped in class on 03 Oct.</li>
+</ul>
+<h3>Prepare for Lecture 2</h3>
+<ul>
+<li>Read the <code>std::unordered_map</code> reference: complexity, <code>rehash</code>, iterator invalidation</li>
+<li>Build and run <code>Student_Resources/recent_set_test.cpp</code> with sanitizers</li>
+</ul>
+</div>
+<div class="box plain">
+<span class="label">MSc expectations</span>
+<ul class="xsmall">
+<li>Claims come with evidence and stated assumptions.</li>
+<li>"It depends" is the start of an answer; say <em>on what</em>, and <em>how much</em>.</li>
+<li>Declare AI assistance and external code in <code>ACKNOWLEDGEMENTS.md</code>; you must be able to explain every line.</li>
+<li>Fabricated benchmark data is academic misconduct.</li>
+</ul>
+</div>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Summary</h2>
-  <ol>
-    <li>A structure's name is not a design. Semantics, workload and constraints come first.</li>
-    <li>Asymptotic cost ≠ system cost: layout, allocation, tails and constants decide at real sizes.</li>
-    <li>An API is a set of promises: outcomes explicit, errors classified, internals hidden.</li>
-    <li>Invariants are how you keep a representation correct — and how tests find corruption early.</li>
-    <li>Design for testability: inject time, keep a reference model, expose counters.</li>
-    <li>Every benchmark comes with what it shows <em>and what it does not</em>.</li>
-  </ol>
-  <p class="small muted">Next: Lecture 2 · Sat 03 Oct — Production Hash Maps · Team formation due.</p>
-  <aside class="notes"><p>If you have time left, ask a student to connect each summary point to a moment in today's scenario.</p></aside>
-</section>
+<h2>Summary</h2>
+<ol>
+<li>A structure's name is not a design. Semantics, workload and constraints come first.</li>
+<li>Asymptotic cost ≠ system cost: layout, allocation, tails and constants decide at real sizes.</li>
+<li>An API is a set of promises: outcomes explicit, errors classified, internals hidden.</li>
+<li>Invariants are how you keep a representation correct — and how tests find corruption early.</li>
+<li>Design for testability: inject time, keep a reference model, expose counters.</li>
+<li>Every benchmark comes with what it shows <em>and what it does not</em>.</li>
+</ol>
+<p class="small muted">Next: Lecture 2 · Sat 03 Oct — Production Hash Maps · Team formation due.</p>
 
+</section>
 <script src="../common/slides.js"></script>
 </body>
 </html>

@@ -1,583 +1,396 @@
+<!doctype html>
 <!DOCTYPE html>
+
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1" name="viewport"/>
 <title>SE618 L11 — Concurrency, Memory and Hardware</title>
-<link rel="stylesheet" href="../common/styles.css">
-<link rel="stylesheet" href="../common/print.css">
-</head>
-<body data-course="SE618" data-lecture="Lecture 11 · Sat 5 Dec 2026">
-
+<link href="../common/styles.css" rel="stylesheet"/>
+<link href="../common/print.css" rel="stylesheet"/>
+<meta content="SE618 Lecture 11: Concurrency, Memory and Hardware-Aware Data Structures. Student-facing interactive slides." name="description"/></head>
+<body data-course="SE618" data-lecture="Lecture 11 · Sat 5 Dec 2026" data-public="true">
 <section class="slide title">
-  <span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
-  <h1>Lecture 11<br>Concurrency, Memory and Hardware-Aware Data Structures</h1>
-  <p>Correct with one thread and O(1) on paper — and slower with 32 threads than with 4.</p>
-  <div class="meta">Saturday 5 December 2026 · 3 hours<br><strong style="color:#fff">Testing + benchmarking checkpoint due today, 23:59 Cairo</strong></div>
-  <aside class="notes">
-    <h4>Plan (3h)</h4>
-    <table><tr><td>00:00–00:15</td><td>Part 1 — Scenario: a scaling curve that bends down</td></tr>
-    <tr><td>00:15–00:55</td><td>Part 2 — Concurrent correctness: invariants, races, atomicity, visibility, locking designs, lock-free, ABA, reclamation</td></tr>
-    <tr><td>00:55–01:30</td><td>Part 3 — Hardware: caches, lines, false sharing, pointer chasing, allocation, skew, NUMA, Amdahl</td></tr>
-    <tr><td>01:30–01:40</td><td>Break</td></tr>
-    <tr><td>01:40–02:20</td><td>Part 4 — Experiments: global vs sharded under uniform/hot keys; false sharing; locality</td></tr>
-    <tr><td>02:20–02:40</td><td>Part 5 — Testing concurrent code: what stress tests can and cannot show; design comparison</td></tr>
-    <tr><td>02:40–03:00</td><td>Part 6 — Benchmark-quality clinic (checkpoint due tonight)</td></tr></table>
-    <h4>Prepare</h4>
-    <p><code>Student_Resources/</code>: <code>concurrent_maps.hpp</code>, <code>sharded_map_bench.cpp</code> (~15 s), <code>false_sharing.cpp</code> (~12 s, optional), <code>locality_bench.cpp</code> (~3 s), <code>concurrency_test.cpp</code> (~3 s), <code>EXERCISE.md</code>. Instructor numbers and interpretation: <code>Instructor_Only/Lecture_11/measured_results.md</code> (i7-11800H, 8 cores/16 threads, Windows, MinGW).</p>
-    <p><strong>Warning:</strong> every number in this lecture is from one machine. Student laptops (4 cores, different OS, different mutex implementations) will produce different curves. That is part of the lesson — make students record their hardware.</p>
-  </aside>
-</section>
+<span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
+<h1>Lecture 11<br/>Concurrency, Memory and Hardware-Aware Data Structures</h1>
+<p>Correct with one thread and O(1) on paper — and slower with 32 threads than with 4.</p>
+<div class="meta">Saturday 5 December 2026 · 3 hours<br/><strong style="color:#fff">Testing + benchmarking checkpoint due today, 23:59 Cairo</strong></div>
 
+</section>
 <section class="slide">
-  <h2>Where we are</h2>
-  <div class="cols">
-    <div class="small">
-      <ul>
-        <li>L2: expected O(1) depends on keys, load, layout</li>
-        <li>L4: pointer-heavy tries lose to arrays at real sizes</li>
-        <li>L9: immutable versions let readers skip locks</li>
-        <li>Today: what happens when many cores touch the same structure — and why memory layout decides speed even with one core</li>
-      </ul>
-    </div>
-    <div class="box key">
-      <span class="label">Today's distinctive lesson</span>
+<h2>Where we are</h2>
+<div class="cols">
+<div class="small">
+<ul>
+<li>L2: expected O(1) depends on keys, load, layout</li>
+<li>L4: pointer-heavy tries lose to arrays at real sizes</li>
+<li>L9: immutable versions let readers skip locks</li>
+<li>Today: what happens when many cores touch the same structure — and why memory layout decides speed even with one core</li>
+</ul>
+</div>
+<div class="box key">
+<span class="label">Today's distinctive lesson</span>
       Sequential correctness and asymptotic complexity are insufficient for scalable concurrent software. Performance is set by <strong>contention, synchronisation, memory layout, caches, false sharing, allocation, locality and coordination</strong>.
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:00</span></p>
-    <p>Say explicitly: "This is not a threads-and-mutexes tutorial. You know how to create a thread and lock a mutex. Today is about why the obvious designs stop scaling, and how to reason and measure instead of guessing."</p>
-    <p>Checkpoint tonight: the last 20 minutes are a benchmark clinic.</p>
-  </aside>
+</div>
+
 </section>
 
-<!-- ====================== PART 1 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 1 · 00:00–00:15</span>
-  <h1>A scaling curve that bends down</h1>
+<span class="kicker">Part 1 · 00:00–00:15</span>
+<h1>A scaling curve that bends down</h1>
 </section>
-
 <section class="slide">
-  <h2>The incident</h2>
-  <div class="cols wide-r">
-    <div class="small">
-      <p>A session-lookup service keeps a hash map in memory. Load test on a 32-core server:</p>
-      <ul>
-        <li>1 → 2 threads: +70%</li>
-        <li>8 threads: gains flatten</li>
-        <li>32 threads: <strong>slower than 8</strong></li>
-      </ul>
-      <div class="box q xsmall"><span class="label">Pairs · 4 min</span>List every possible cause. For each: what measurement would confirm it?</div>
-    </div>
-    <svg viewBox="0 0 560 330" aria-label="throughput vs threads">
-      <g font-family="Segoe UI, Arial" font-size="14" fill="#46505e">
-        <line x1="60" y1="280" x2="540" y2="280" stroke="#14304a"/><line x1="60" y1="280" x2="60" y2="20" stroke="#14304a"/>
-        <text x="250" y="315">threads (1, 2, 4, 8, 16, 32)</text><text x="4" y="150" transform="rotate(-90 14 150)">throughput</text>
-        <polyline points="80,250 160,200 240,165 320,150 400,165 480,210" fill="none" stroke="#a3262a" stroke-width="3"/>
-        <polyline points="80,250 160,220 240,160 320,40" fill="none" stroke="#9aa6b3" stroke-width="2" stroke-dasharray="6 5"/>
-        <text x="330" y="45" fill="#9aa6b3">ideal linear</text><text x="420" y="235" fill="#a3262a">observed</text>
-      </g>
-    </svg>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:03</span></p>
-    <h4>Expected causes (collect, then sort into two groups)</h4>
-    <table><tr><th>Synchronisation</th><th>Hardware / memory</th></tr>
-    <tr><td>One global lock (serialisation + lock handoff cost)</td><td>Cache-line bouncing of the lock word and hot data</td></tr>
-    <tr><td>Allocator lock (every insert mallocs a node)</td><td>False sharing of per-thread counters/stats</td></tr>
-    <tr><td>Hot keys: many threads want the same entry</td><td>Pointer chasing: node-based map, cache misses</td></tr>
-    <tr><td>Logging/metrics behind a mutex</td><td>Memory bandwidth; NUMA (remote memory on multi-socket)</td></tr>
-    <tr><td>More threads than cores (oversubscription)</td><td>Frequency drops when all cores are busy (turbo)</td></tr></table>
-    <h4>Measurements</h4>
-    <p>Profile lock wait time; per-thread counters; hardware counters (cache misses, "HITM" / cross-core transfers via <code>perf c2c</code> on Linux); key-frequency histogram; compare a single-threaded run with pinned threads; vary one factor at a time.</p>
-    <h4>Teaching point</h4>
-    <p>"A curve that <em>decreases</em> is the signature of contention: adding workers adds coordination cost faster than it adds capacity."</p>
-  </aside>
+<h2>The incident</h2>
+<div class="cols wide-r">
+<div class="small">
+<p>A session-lookup service keeps a hash map in memory. Load test on a 32-core server:</p>
+<ul>
+<li>1 → 2 threads: +70%</li>
+<li>8 threads: gains flatten</li>
+<li>32 threads: <strong>slower than 8</strong></li>
+</ul>
+<div class="box q xsmall"><span class="label">Pairs · 4 min</span>List every possible cause. For each: what measurement would confirm it?</div>
+</div>
+<svg aria-label="throughput vs threads" viewbox="0 0 560 330">
+<g fill="#46505e" font-family="Segoe UI, Arial" font-size="14">
+<line stroke="#14304a" x1="60" x2="540" y1="280" y2="280"></line><line stroke="#14304a" x1="60" x2="60" y1="280" y2="20"></line>
+<text x="250" y="315">threads (1, 2, 4, 8, 16, 32)</text><text transform="rotate(-90 14 150)" x="4" y="150">throughput</text>
+<polyline fill="none" points="80,250 160,200 240,165 320,150 400,165 480,210" stroke="#a3262a" stroke-width="3"></polyline>
+<polyline fill="none" points="80,250 160,220 240,160 320,40" stroke="#9aa6b3" stroke-dasharray="6 5" stroke-width="2"></polyline>
+<text fill="#9aa6b3" x="330" y="45">ideal linear</text><text fill="#a3262a" x="420" y="235">observed</text>
+</g>
+</svg>
+</div>
+
 </section>
 
-<!-- ====================== PART 2 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 2 · 00:15–00:55</span>
-  <h1>Concurrent correctness</h1>
+<span class="kicker">Part 2 · 00:15–00:55</span>
+<h1>Concurrent correctness</h1>
 </section>
-
 <section class="slide">
-  <h2>Sequential invariants are not enough</h2>
-  <div class="cols small">
-    <div>
-      <h3>Sequential invariant</h3>
-      <p>"After every public call, <code>size()</code> equals the number of entries."</p>
-      <h3 style="margin-top:12px">Concurrent requirement</h3>
-      <ul>
-        <li>Invariants hold at every point <strong>another thread can observe</strong></li>
-        <li>Each operation appears to happen at one instant (<strong>linearizability</strong>)</li>
-        <li>Compound operations must be atomic <strong>as a whole</strong> if callers rely on them</li>
-      </ul>
-    </div>
-    <pre class="sm"><code>// every call is thread-safe ...
+<h2>Sequential invariants are not enough</h2>
+<div class="cols small">
+<div>
+<h3>Sequential invariant</h3>
+<p>"After every public call, <code>size()</code> equals the number of entries."</p>
+<h3 style="margin-top:12px">Concurrent requirement</h3>
+<ul>
+<li>Invariants hold at every point <strong>another thread can observe</strong></li>
+<li>Each operation appears to happen at one instant (<strong>linearizability</strong>)</li>
+<li>Compound operations must be atomic <strong>as a whole</strong> if callers rely on them</li>
+</ul>
+</div>
+<pre class="sm"><code>// every call is thread-safe ...
 uint64_t v = map.get(k);   // locked
 map.put(k, v + 1);         // locked
 // ... the sequence is not:
 // T1 get=5   T2 get=5
 // T1 put 6   T2 put 6   → one update lost</code></pre>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:15</span></p>
-    <h4>Say</h4>
-    <p>"'Thread-safe' is a property of single calls. Your callers think in terms of <em>operations</em> — 'increment the counter', 'transfer money'. If the API only offers get and put, every caller will write this race. The fix is an API that offers the compound operation atomically: <code>increment(k)</code>, <code>compute(k, f)</code>, compare-and-set."</p>
-    <h4>Linearizability, one sentence</h4>
-    <p>Each operation behaves as if it happened at a single point between its call and its return, and all threads agree on that order. A mutex around each operation gives it trivially; lock-free designs have to argue for it.</p>
-    <h4>This is measured later</h4>
-    <p><code>concurrency_test.cpp</code> shows exactly this lost update — and that ThreadSanitizer cannot see it.</p>
-  </aside>
-</section>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Races, atomicity, visibility</h2>
-  <table class="small">
-    <tr><th>Problem</th><th>What goes wrong</th><th>Tool</th></tr>
-    <tr><td>Data race</td><td>Two threads access the same memory, at least one writes, no synchronisation → <strong>undefined behaviour</strong> in C++</td><td>mutex, atomics; ThreadSanitizer finds them</td></tr>
-    <tr><td>Atomicity violation</td><td>Each step is synchronised, but the sequence is not</td><td>API design, a larger critical section</td></tr>
-    <tr><td>Visibility / ordering</td><td>A write is not seen by another core, or seen in a different order</td><td>Release/acquire via mutex or atomics</td></tr>
-  </table>
-  <div class="box plain small" style="margin-top:12px"><span class="label">Memory ordering, conceptually</span>Compilers and CPUs reorder memory operations. A mutex unlock (release) followed by a lock (acquire) guarantees that everything written before the unlock is visible after the lock. Relaxed atomics give atomicity without ordering.</div>
-  <aside class="notes">
-    <p><span class="t">00:22</span></p>
-    <h4>Keep this conceptual</h4>
-    <p>Do not teach the C++ memory model. The three facts students need: (1) a data race on non-atomic data is UB — the program can do anything, including "work in testing"; (2) mutexes provide both mutual exclusion and visibility; (3) <code>std::atomic</code> with the default <code>seq_cst</code> is the safe default; weaker orderings are an expert optimisation that needs a proof.</p>
-    <h4>Classic visibility bug</h4>
-    <p>A publisher sets <code>data = ...; ready = true;</code> with plain variables; the consumer spins on <code>ready</code> and reads stale <code>data</code> (or loops forever because the compiler hoisted the read). Fix: make <code>ready</code> an atomic with release/acquire.</p>
-    <h4>Our false-sharing experiment</h4>
-    <p>It uses <code>fetch_add(1, memory_order_relaxed)</code>: each counter only needs atomicity, not ordering with other data. That choice is justified in one sentence — and every weaker ordering in your code should be.</p>
-  </aside>
-</section>
+<h2>Races, atomicity, visibility</h2>
+<table class="small">
+<tr><th>Problem</th><th>What goes wrong</th><th>Tool</th></tr>
+<tr><td>Data race</td><td>Two threads access the same memory, at least one writes, no synchronisation → <strong>undefined behaviour</strong> in C++</td><td>mutex, atomics; ThreadSanitizer finds them</td></tr>
+<tr><td>Atomicity violation</td><td>Each step is synchronised, but the sequence is not</td><td>API design, a larger critical section</td></tr>
+<tr><td>Visibility / ordering</td><td>A write is not seen by another core, or seen in a different order</td><td>Release/acquire via mutex or atomics</td></tr>
+</table>
+<div class="box plain small" style="margin-top:12px"><span class="label">Memory ordering, conceptually</span>Compilers and CPUs reorder memory operations. A mutex unlock (release) followed by a lock (acquire) guarantees that everything written before the unlock is visible after the lock. Relaxed atomics give atomicity without ordering.</div>
 
+</section>
 <section class="slide">
-  <h2>Locking designs for a shared map</h2>
-  <table class="small">
-    <tr><th>Design</th><th>Parallelism</th><th>Cost / risk</th></tr>
-    <tr><td>Coarse: one mutex</td><td>None; all operations serialise</td><td>Simple, obviously correct; the lock becomes the hot spot</td></tr>
-    <tr><td>Reader-writer lock</td><td>Readers in parallel</td><td>Writers starve or stall readers; the lock word still bounces; implementation quality varies wildly</td></tr>
-    <tr><td>Sharding / lock striping</td><td>Operations on different shards in parallel</td><td>Hot keys still serialise; cross-shard operations (size, iteration, resize) are hard</td></tr>
-    <tr><td>Fine-grained (per bucket/node)</td><td>High</td><td>Lock ordering, deadlock risk, memory per lock</td></tr>
-    <tr><td>Lock-free (CAS-based)</td><td>System-wide progress guaranteed; an individual operation may still starve</td><td>Very hard to get right; ABA; memory reclamation</td></tr>
-  </table>
-  <aside class="notes">
-    <p><span class="t">00:28</span></p>
-    <h4>Sharding details</h4>
-    <ul>
-      <li>Choose the shard by a <em>mixed</em> hash (Lecture 2): if keys share low bits and you take <code>k % 64</code>, all keys can land in one shard.</li>
-      <li>Align each shard to its own cache line(s) — otherwise neighbouring locks falsely share (our <code>alignas(64)</code>).</li>
-      <li>Global operations (total size, iteration) either lock all shards in a fixed order (deadlock-free, slow) or return a non-atomic, approximate answer — document which (our <code>total()</code> says it is not a snapshot).</li>
-    </ul>
-    <h4>Reader-writer locks</h4>
-    <p>Intuition says "90% reads → RW lock". Reality: even readers write to the lock's shared counter, so the cache line still bounces; for short critical sections an RW lock is often slower than a plain mutex. On this course's test machine (MinGW) <code>std::shared_mutex</code> was 60–400× slower than <code>std::mutex</code>, which is why the benchmark makes it opt-in (<code>--rwlock</code>). Performance portability is real.</p>
-  </aside>
-</section>
+<h2>Locking designs for a shared map</h2>
+<table class="small">
+<tr><th>Design</th><th>Parallelism</th><th>Cost / risk</th></tr>
+<tr><td>Coarse: one mutex</td><td>None; all operations serialise</td><td>Simple, obviously correct; the lock becomes the hot spot</td></tr>
+<tr><td>Reader-writer lock</td><td>Readers in parallel</td><td>Writers starve or stall readers; the lock word still bounces; implementation quality varies wildly</td></tr>
+<tr><td>Sharding / lock striping</td><td>Operations on different shards in parallel</td><td>Hot keys still serialise; cross-shard operations (size, iteration, resize) are hard</td></tr>
+<tr><td>Fine-grained (per bucket/node)</td><td>High</td><td>Lock ordering, deadlock risk, memory per lock</td></tr>
+<tr><td>Lock-free (CAS-based)</td><td>System-wide progress guaranteed; an individual operation may still starve</td><td>Very hard to get right; ABA; memory reclamation</td></tr>
+</table>
 
+</section>
 <section class="slide">
-  <h2>Lock-free is not a synonym for fast</h2>
-  <div class="cols small">
-    <div>
-      <ul>
-        <li><strong>Lock-free</strong>: guarantees system-wide progress; an individual thread/operation may still starve</li>
-        <li><strong>Wait-free</strong>: every operation completes in a bounded number of its own steps (rare, expensive)</li>
-        <li>Built from compare-and-swap (CAS) retry loops</li>
-        <li>Under contention, CAS loops retry; the cache line still bounces</li>
-        <li>Benefit: no convoying behind a descheduled lock holder; progress guarantees</li>
-      </ul>
-    </div>
-    <div class="box warn">
-      <span class="label">Two hard problems</span>
-      <p class="xsmall"><strong>ABA:</strong> a thread reads pointer A, is delayed, another thread pops A, frees it, pushes a new node at the same address A. The first thread's CAS succeeds on a different object.</p>
-      <p class="xsmall"><strong>Safe reclamation:</strong> when may a node be freed if another thread may still be reading it? Hazard pointers, epochs, RCU — each with its own cost.</p>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:36</span></p>
-    <h4>Say</h4>
-    <p>"Lock-free changes <em>who</em> waits and <em>how</em>, not whether contention exists. On a hot key a lock-free map still funnels all threads through one cache line. Its advantages are progress and latency tails when threads are descheduled, not raw throughput."</p>
-    <h4>ABA in one example</h4>
-    <p>Lock-free stack: <code>pop</code> reads <code>head = A</code> and <code>next = A->next = B</code>, then does <code>CAS(head, A, B)</code>. Meanwhile others pop A and B and push A again (same address, memory reused). The CAS succeeds; head now points to B, which was freed. Fixes: tagged pointers (version counter), hazard pointers, epoch-based reclamation.</p>
-    <h4>Why reclamation is the hard part</h4>
-    <p>In a garbage-collected language, "is anyone still reading this node?" is answered by the GC. In C++ you must implement that answer yourself. Most bugs in published lock-free C++ code are reclamation bugs.</p>
-  </aside>
-</section>
+<h2>Lock-free is not a synonym for fast</h2>
+<div class="cols small">
+<div>
+<ul>
+<li><strong>Lock-free</strong>: guarantees system-wide progress; an individual thread/operation may still starve</li>
+<li><strong>Wait-free</strong>: every operation completes in a bounded number of its own steps (rare, expensive)</li>
+<li>Built from compare-and-swap (CAS) retry loops</li>
+<li>Under contention, CAS loops retry; the cache line still bounces</li>
+<li>Benefit: no convoying behind a descheduled lock holder; progress guarantees</li>
+</ul>
+</div>
+<div class="box warn">
+<span class="label">Two hard problems</span>
+<p class="xsmall"><strong>ABA:</strong> a thread reads pointer A, is delayed, another thread pops A, frees it, pushes a new node at the same address A. The first thread's CAS succeeds on a different object.</p>
+<p class="xsmall"><strong>Safe reclamation:</strong> when may a node be freed if another thread may still be reading it? Hazard pointers, epochs, RCU — each with its own cost.</p>
+</div>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Three designs, compared honestly</h2>
-  <table class="small">
-    <tr><th></th><th>A. Global lock</th><th>B. Sharded locks</th><th>C. Lock-free map</th></tr>
-    <tr><td>Implementation effort</td><td>Hours</td><td>A day</td><td>Weeks (or a vetted library)</td></tr>
-    <tr><td>Correctness risk</td><td>Low</td><td>Low–medium (global ops)</td><td>High (ABA, reclamation, ordering)</td></tr>
-    <tr><td>Uniform keys, many cores</td><td>Poor</td><td>Good</td><td>Good</td></tr>
-    <tr><td>Hot key</td><td>Poor</td><td>≈ A</td><td>≈ contention on one line</td></tr>
-    <tr><td>Memory overhead</td><td>Lowest</td><td>+ locks, padding</td><td>Nodes, reclamation metadata</td></tr>
-    <tr><td>Debuggability / portability</td><td>Easy</td><td>Easy</td><td>Hard; ordering bugs are platform-specific</td></tr>
-  </table>
-  <div class="box key small" style="margin-top:10px">Choose C only if measurement shows B is the bottleneck <em>and</em> you can test and maintain C — usually by using a mature library, not writing one.</div>
-  <aside class="notes">
-    <p><span class="t">00:45</span></p>
-    <h4>Ask</h4>
-    <p>"Your service has 90% reads and a hot key receiving 40% of traffic. Which design?" Expected: none of the locking designs fixes the hot key; fix the <em>workload</em> or the data: cache the hot value per thread (read-mostly replicas), split the hot key into sub-counters (sharded counter), batch updates, or make the hot entry immutable and swap it atomically (Lecture 9). Data-structure choice cannot beat a skewed workload by itself.</p>
-    <h4>Other angle</h4>
-    <p>Many high-performance servers avoid sharing entirely: each core owns a partition of the data and requests are routed to the owning core (shared-nothing, e.g. Seastar-style designs). Mention as the extreme point of sharding.</p>
-  </aside>
+<h2>Three designs, compared honestly</h2>
+<table class="small">
+<tr><th></th><th>A. Global lock</th><th>B. Sharded locks</th><th>C. Lock-free map</th></tr>
+<tr><td>Implementation effort</td><td>Hours</td><td>A day</td><td>Weeks (or a vetted library)</td></tr>
+<tr><td>Correctness risk</td><td>Low</td><td>Low–medium (global ops)</td><td>High (ABA, reclamation, ordering)</td></tr>
+<tr><td>Uniform keys, many cores</td><td>Poor</td><td>Good</td><td>Good</td></tr>
+<tr><td>Hot key</td><td>Poor</td><td>≈ A</td><td>≈ contention on one line</td></tr>
+<tr><td>Memory overhead</td><td>Lowest</td><td>+ locks, padding</td><td>Nodes, reclamation metadata</td></tr>
+<tr><td>Debuggability / portability</td><td>Easy</td><td>Easy</td><td>Hard; ordering bugs are platform-specific</td></tr>
+</table>
+<div class="box key small" style="margin-top:10px">Choose C only if measurement shows B is the bottleneck <em>and</em> you can test and maintain C — usually by using a mature library, not writing one.</div>
+
 </section>
 
-<!-- ====================== PART 3 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 3 · 00:55–01:30</span>
-  <h1>The hardware under the data structure</h1>
+<span class="kicker">Part 3 · 00:55–01:30</span>
+<h1>The hardware under the data structure</h1>
 </section>
-
 <section class="slide">
-  <h2>Memory hierarchy and cache lines</h2>
-  <div class="cols wide-r">
-    <table class="tight small">
-      <tr><th>Level</th><th class="num">≈ latency</th><th class="num">≈ size (this laptop)</th></tr>
-      <tr><td>register</td><td class="num">&lt; 1 ns</td><td class="num">—</td></tr>
-      <tr><td>L1 data</td><td class="num">~1 ns</td><td class="num">48 KB / core</td></tr>
-      <tr><td>L2</td><td class="num">~3–5 ns</td><td class="num">1.25 MB / core</td></tr>
-      <tr><td>L3 (shared)</td><td class="num">~10–20 ns</td><td class="num">24 MB</td></tr>
-      <tr><td>DRAM</td><td class="num">~80–100 ns</td><td class="num">GBs</td></tr>
-    </table>
-    <div class="small">
-      <ul>
-        <li>Memory moves in <strong>cache lines</strong>: commonly 64 bytes on mainstream x86; platform-dependent</li>
-        <li>Touching 1 byte loads 64; neighbours come for free</li>
-        <li>Prefetchers predict <strong>sequential</strong> access patterns</li>
-        <li>A write makes the line exclusive to one core: other cores' copies are invalidated</li>
-      </ul>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:55</span></p>
-    <h4>Say</h4>
-    <p>"Big-O counts operations; the hardware charges per cache line and per miss. A DRAM miss costs as much as ~100–300 simple instructions. Designs that touch fewer lines, in predictable order, win — often by more than any asymptotic improvement."</p>
-    <h4>Coherence in one sentence</h4>
-    <p>When one core writes a line, every other core's copy is invalidated; the next reader must fetch it from the writer's cache (~tens of ns, more across sockets). A lock word or counter written by many cores ping-pongs between them — that is "cache-line bouncing".</p>
-    <h4>Hardware numbers</h4>
-    <p>Sizes are for the i7-11800H used for the measurements; latencies are typical orders of magnitude. Ask students to look up their own CPU's cache sizes (<code>lscpu</code>, CPU-Z) before interpreting the locality benchmark.</p>
-  </aside>
+<h2>Memory hierarchy and cache lines</h2>
+<div class="cols wide-r">
+<table class="tight small">
+<tr><th>Level</th><th class="num">≈ latency</th><th class="num">≈ size (this laptop)</th></tr>
+<tr><td>register</td><td class="num">&lt; 1 ns</td><td class="num">—</td></tr>
+<tr><td>L1 data</td><td class="num">~1 ns</td><td class="num">48 KB / core</td></tr>
+<tr><td>L2</td><td class="num">~3–5 ns</td><td class="num">1.25 MB / core</td></tr>
+<tr><td>L3 (shared)</td><td class="num">~10–20 ns</td><td class="num">24 MB</td></tr>
+<tr><td>DRAM</td><td class="num">~80–100 ns</td><td class="num">GBs</td></tr>
+</table>
+<div class="small">
+<ul>
+<li>Memory moves in <strong>cache lines</strong>: commonly 64 bytes on mainstream x86; platform-dependent</li>
+<li>Touching 1 byte loads 64; neighbours come for free</li>
+<li>Prefetchers predict <strong>sequential</strong> access patterns</li>
+<li>A write makes the line exclusive to one core: other cores' copies are invalidated</li>
+</ul>
+</div>
+</div>
+
 </section>
-
 <section class="slide">
-  <h2>False sharing: no shared data, shared cache line</h2>
-  <div class="cols">
-    <pre class="sm"><code>struct Packed {            // 8 per line
+<h2>False sharing: no shared data, shared cache line</h2>
+<div class="cols">
+<pre class="sm"><code>struct Packed {            // 8 per line
     std::atomic&lt;uint64_t&gt; c[16];
 };
 struct alignas(64) Padded { // 1 per line
     std::atomic&lt;uint64_t&gt; v;
 };
 // thread t only touches its own counter</code></pre>
-    <table class="tight small">
-      <tr><th class="num">threads</th><th class="num">packed M/s</th><th class="num">padded M/s</th></tr>
-      <tr><td class="num">1</td><td class="num">202</td><td class="num">202</td></tr>
-      <tr><td class="num">2</td><td class="num">109</td><td class="num">381</td></tr>
-      <tr><td class="num">4</td><td class="num">84</td><td class="num">663</td></tr>
-      <tr><td class="num">8</td><td class="num">81</td><td class="num">994</td></tr>
-    </table>
-  </div>
-  <p class="xsmall muted">Total increments/s, median of 3, i7-11800H (8 cores), MinGW g++ 15 -O2. <code>false_sharing.cpp</code>. Your machine will differ.</p>
-  <aside class="notes">
-    <p><span class="t">01:03</span></p>
-    <h4>Read the table</h4>
-    <p>With packed counters, 8 threads achieve <em>less</em> total throughput than 1 thread (81 vs 202 M/s), although no thread reads another thread's counter. Padding to one counter per line restores near-linear scaling (994 ≈ 4.9× one thread with 8 threads; not 8× because of turbo frequency, memory traffic and the loop itself). 12× difference from a layout change, with identical code logic.</p>
-    <h4>Where false sharing hides in real code</h4>
-    <p>Per-thread statistics arrays, adjacent locks (our shards are <code>alignas(64)</code> for this reason), a frequently written field next to a read-mostly field in the same struct, the reference count next to the data in a shared object.</p>
-    <h4>Detection</h4>
-    <p>Linux <code>perf c2c</code> reports cache lines with cross-core "HITM" traffic; Intel VTune has a memory-access analysis. Or: the symptom "adding threads makes it slower although nothing is shared".</p>
-    <h4>Caveat</h4>
-    <p>C++17 offers <code>std::hardware_destructive_interference_size</code> instead of hard-coding 64; support varies. Some CPUs prefetch adjacent line pairs, so 128 bytes can be needed.</p>
-  </aside>
-</section>
+<table class="tight small">
+<tr><th class="num">threads</th><th class="num">packed M/s</th><th class="num">padded M/s</th></tr>
+<tr><td class="num">1</td><td class="num">202</td><td class="num">202</td></tr>
+<tr><td class="num">2</td><td class="num">109</td><td class="num">381</td></tr>
+<tr><td class="num">4</td><td class="num">84</td><td class="num">663</td></tr>
+<tr><td class="num">8</td><td class="num">81</td><td class="num">994</td></tr>
+</table>
+</div>
+<p class="xsmall muted">Total increments/s, median of 3, i7-11800H (8 cores), MinGW g++ 15 -O2. <code>false_sharing.cpp</code>. Your machine will differ.</p>
 
-<section class="slide">
-  <h2>Locality: same work, different layout</h2>
-  <table class="tight small">
-    <tr><th class="num">elements</th><th class="num">nodes KB</th><th class="num">vector</th><th class="num">list, in memory order</th><th class="num">list, random order</th><th class="num">AoS field</th><th class="num">SoA field</th></tr>
-    <tr><td class="num">1,024</td><td class="num">16</td><td class="num">0.39</td><td class="num">1.27</td><td class="num">1.27</td><td class="num">0.98</td><td class="num">0.98</td></tr>
-    <tr><td class="num">16,384</td><td class="num">256</td><td class="num">0.54</td><td class="num">1.20</td><td class="num">4.27</td><td class="num">1.20</td><td class="num">0.96</td></tr>
-    <tr><td class="num">262,144</td><td class="num">4,096</td><td class="num">0.35</td><td class="num">1.25</td><td class="num">18.96</td><td class="num">2.50</td><td class="num">0.99</td></tr>
-    <tr class="hl"><td class="num">4,194,304</td><td class="num">65,536</td><td class="num">0.92</td><td class="num">2.32</td><td class="num"><strong>121.25</strong></td><td class="num">4.46</td><td class="num">1.28</td></tr>
-  </table>
-  <p class="xsmall muted">ns per element summed, median of 5 passes, one machine. AoS: 64-byte struct, summing one 8-byte field. <code>locality_bench.cpp</code></p>
-  <aside class="notes">
-    <p><span class="t">01:10</span></p>
-    <h4>What exactly is measured</h4>
-    <p>Summing n int64 values: identical O(n) logical work in every column. The list columns use the same node pool; only the order in which nodes are linked differs (memory order vs shuffled). So the difference between the two list columns is pure access-pattern cost, not "lists are slow".</p>
-    <h4>Read it</h4>
-    <ul>
-      <li>Small n (fits in L1/L2): all layouts are within ~3×.</li>
-      <li>Random pointer chasing beyond the caches: 121 ns per element — every hop is a DRAM miss, and the next address is unknown until the current load finishes (no parallelism, no prefetching). 130× slower than the vector.</li>
-      <li>A list in memory order is only ~2.5× slower than a vector even at 4M elements: the prefetcher follows sequential addresses through the pointers. Allocation order and fragmentation therefore change the speed of the <em>same</em> data structure over a program's lifetime.</li>
-      <li>AoS vs SoA: reading one field of a 64-byte struct loads 8× more lines than a dedicated array; the gap grows once data leaves the cache (4.5 vs 1.3 ns).</li>
-    </ul>
-    <h4>Connect back</h4>
-    <p>Lecture 2 (node-based vs flat hash maps), Lecture 4 (pointer tries vs sorted arrays), Lecture 9 (path copying pays pointer chasing): this table is the mechanism behind all three.</p>
-  </aside>
 </section>
-
 <section class="slide">
-  <h2>Allocation, fragmentation, skew, NUMA</h2>
-  <div class="cols small">
-    <div>
-      <ul>
-        <li><strong>Allocation</strong>: every node insert calls the allocator; general-purpose allocators may lock or bounce shared metadata under threads</li>
-        <li><strong>Fragmentation</strong>: long-running processes scatter nodes → locality decays; memory is "free" but unusable</li>
-        <li>Mitigations: pools/arenas, per-thread caches (tcmalloc, jemalloc, mimalloc), flat layouts</li>
-      </ul>
-    </div>
-    <div>
-      <ul>
-        <li><strong>Hot keys / skew</strong>: sharding spreads keys, not load</li>
-        <li><strong>NUMA</strong> (multi-socket): memory attached to the other socket is slower; a structure allocated by one thread and used by all can bottleneck on one memory controller</li>
-        <li><strong>Memory bandwidth</strong>: scanning structures saturate it long before all cores are busy</li>
-      </ul>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:17</span></p>
-    <h4>Allocator story</h4>
-    <p>Swapping the system allocator for a thread-caching one (jemalloc/tcmalloc/mimalloc) frequently changes multi-threaded benchmark results by 2× for node-based containers — without changing a line of the data structure. That is a confounder: report which allocator you used.</p>
-    <h4>NUMA, conceptually</h4>
-    <p>On two-socket servers, "first touch" decides where a page lives. A table initialised by one thread lives on that socket; threads on the other socket pay remote latency and cross-socket coherence for every access. Solutions: partition data per socket, initialise in parallel, pin threads. Students' laptops are single-socket — mention only.</p>
-  </aside>
+<h2>Locality: same work, different layout</h2>
+<table class="tight small">
+<tr><th class="num">elements</th><th class="num">nodes KB</th><th class="num">vector</th><th class="num">list, in memory order</th><th class="num">list, random order</th><th class="num">AoS field</th><th class="num">SoA field</th></tr>
+<tr><td class="num">1,024</td><td class="num">16</td><td class="num">0.39</td><td class="num">1.27</td><td class="num">1.27</td><td class="num">0.98</td><td class="num">0.98</td></tr>
+<tr><td class="num">16,384</td><td class="num">256</td><td class="num">0.54</td><td class="num">1.20</td><td class="num">4.27</td><td class="num">1.20</td><td class="num">0.96</td></tr>
+<tr><td class="num">262,144</td><td class="num">4,096</td><td class="num">0.35</td><td class="num">1.25</td><td class="num">18.96</td><td class="num">2.50</td><td class="num">0.99</td></tr>
+<tr class="hl"><td class="num">4,194,304</td><td class="num">65,536</td><td class="num">0.92</td><td class="num">2.32</td><td class="num"><strong>121.25</strong></td><td class="num">4.46</td><td class="num">1.28</td></tr>
+</table>
+<p class="xsmall muted">ns per element summed, median of 5 passes, one machine. AoS: 64-byte struct, summing one 8-byte field. <code>locality_bench.cpp</code></p>
+
 </section>
-
 <section class="slide">
-  <h2>Amdahl-style reasoning</h2>
-  <div class="cols">
-    <div class="small">
-      <p>If a fraction <em>s</em> of the work is serial (e.g. inside one lock):</p>
-      <p class="lead">speedup(N) ≤ 1 / (s + (1 − s)/N)</p>
-      <ul>
-        <li>s = 10% → at most 10×, however many cores</li>
-        <li>s = 25% → at most 4×</li>
-        <li>Contention makes s grow with N → the curve bends <strong>down</strong></li>
-      </ul>
-    </div>
-    <table class="tight small">
-      <tr><th class="num">serial s</th><th class="num">N = 8</th><th class="num">N = 32</th><th class="num">N → ∞</th></tr>
-      <tr><td class="num">1%</td><td class="num">7.5×</td><td class="num">24.4×</td><td class="num">100×</td></tr>
-      <tr><td class="num">10%</td><td class="num">4.7×</td><td class="num">7.8×</td><td class="num">10×</td></tr>
-      <tr><td class="num">25%</td><td class="num">2.9×</td><td class="num">3.7×</td><td class="num">4×</td></tr>
-    </table>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:23</span></p>
-    <h4>Say</h4>
-    <p>"Amdahl gives an upper bound when the serial part is constant. A contended lock is worse than constant: the time to hand the lock over grows with the number of waiters. That is why the global-lock curve in our experiment goes down, not flat."</p>
-    <h4>Use it for estimation</h4>
-    <p>If a profile shows 20% of time inside a global lock at 1 thread, you know before any experiment that the service cannot exceed 5× regardless of cores — so the lock must go before buying bigger machines. (Universal Scalability Law adds a coherence term that captures the downward bend; mention the name only.)</p>
-    <h4>Throughput vs latency</h4>
-    <p>Under contention, throughput may still rise slowly while p99 latency explodes, because some requests queue behind many others. Report both.</p>
-    <h4>Transition to break</h4>
-    <p>"After the break we measure: global vs sharded, uniform vs hot key."</p>
-  </aside>
+<h2>Allocation, fragmentation, skew, NUMA</h2>
+<div class="cols small">
+<div>
+<ul>
+<li><strong>Allocation</strong>: every node insert calls the allocator; general-purpose allocators may lock or bounce shared metadata under threads</li>
+<li><strong>Fragmentation</strong>: long-running processes scatter nodes → locality decays; memory is "free" but unusable</li>
+<li>Mitigations: pools/arenas, per-thread caches (tcmalloc, jemalloc, mimalloc), flat layouts</li>
+</ul>
+</div>
+<div>
+<ul>
+<li><strong>Hot keys / skew</strong>: sharding spreads keys, not load</li>
+<li><strong>NUMA</strong> (multi-socket): memory attached to the other socket is slower; a structure allocated by one thread and used by all can bottleneck on one memory controller</li>
+<li><strong>Memory bandwidth</strong>: scanning structures saturate it long before all cores are busy</li>
+</ul>
+</div>
+</div>
+
+</section>
+<section class="slide">
+<h2>Amdahl-style reasoning</h2>
+<div class="cols">
+<div class="small">
+<p>If a fraction <em>s</em> of the work is serial (e.g. inside one lock):</p>
+<p class="lead">speedup(N) ≤ 1 / (s + (1 − s)/N)</p>
+<ul>
+<li>s = 10% → at most 10×, however many cores</li>
+<li>s = 25% → at most 4×</li>
+<li>Contention makes s grow with N → the curve bends <strong>down</strong></li>
+</ul>
+</div>
+<table class="tight small">
+<tr><th class="num">serial s</th><th class="num">N = 8</th><th class="num">N = 32</th><th class="num">N → ∞</th></tr>
+<tr><td class="num">1%</td><td class="num">7.5×</td><td class="num">24.4×</td><td class="num">100×</td></tr>
+<tr><td class="num">10%</td><td class="num">4.7×</td><td class="num">7.8×</td><td class="num">10×</td></tr>
+<tr><td class="num">25%</td><td class="num">2.9×</td><td class="num">3.7×</td><td class="num">4×</td></tr>
+</table>
+</div>
+
+</section>
+<section class="slide divider">
+<span class="kicker">01:30–01:40</span>
+<h1>Break — 10 minutes</h1>
+<p>Download <code>Lecture_11/Student_Resources/</code> · Note your CPU model and core count</p>
 </section>
 
 <section class="slide divider">
-  <span class="kicker">01:30–01:40</span>
-  <h1>Break — 10 minutes</h1>
-  <p>Download <code>Lecture_11/Student_Resources/</code> · Note your CPU model and core count</p>
+<span class="kicker">Part 4 · 01:40–02:20</span>
+<h1>Experiments: contention, sharing, locality</h1>
 </section>
-
-<!-- ====================== PART 4 ====================== -->
-<section class="slide divider">
-  <span class="kicker">Part 4 · 01:40–02:20</span>
-  <h1>Experiments: contention, sharing, locality</h1>
-</section>
-
 <section class="slide">
-  <h2>Experiment E1: predict first</h2>
-  <div class="cols wide-l small">
-    <div>
-      <p><code>GlobalLockMap</code> vs <code>ShardedMap&lt;64&gt;</code>, 90% <code>get</code> / 10% <code>increment</code>, 1M operations per thread, keys prepared before timing.</p>
-      <table class="tight">
-        <tr><th>Workload</th><th>1 thread</th><th>2</th><th>4</th><th>8</th></tr>
-        <tr><td>uniform, global</td><td></td><td></td><td></td><td></td></tr>
-        <tr><td>uniform, sharded</td><td></td><td></td><td></td><td></td></tr>
-        <tr><td>hot key, global</td><td></td><td></td><td></td><td></td></tr>
-        <tr><td>hot key, sharded</td><td></td><td></td><td></td><td></td></tr>
-      </table>
-      <p class="xsmall">Hot key: 90% of operations hit key 0.</p>
-    </div>
-    <div class="box plain xsmall">
-      <span class="label">Build and run</span>
-      <code>g++ -std=c++20 -O2 -pthread sharded_map_bench.cpp -o bench</code><br><code>./bench</code><br><br>
-      <span class="label">Fallback</span>
+<h2>Experiment E1: predict first</h2>
+<div class="cols wide-l small">
+<div>
+<p><code>GlobalLockMap</code> vs <code>ShardedMap&lt;64&gt;</code>, 90% <code>get</code> / 10% <code>increment</code>, 1M operations per thread, keys prepared before timing.</p>
+<table class="tight">
+<tr><th>Workload</th><th>1 thread</th><th>2</th><th>4</th><th>8</th></tr>
+<tr><td>uniform, global</td><td></td><td></td><td></td><td></td></tr>
+<tr><td>uniform, sharded</td><td></td><td></td><td></td><td></td></tr>
+<tr><td>hot key, global</td><td></td><td></td><td></td><td></td></tr>
+<tr><td>hot key, sharded</td><td></td><td></td><td></td><td></td></tr>
+</table>
+<p class="xsmall">Hot key: 90% of operations hit key 0.</p>
+</div>
+<div class="box plain xsmall">
+<span class="label">Build and run</span>
+<code>g++ -std=c++20 -O2 -pthread sharded_map_bench.cpp -o bench</code><br/><code>./bench</code><br/><br/>
+<span class="label">Fallback</span>
       Fewer than 8 hardware threads? The program skips larger counts. Oversubscription measures scheduling, not parallelism.
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:40</span></p>
-    <h4>Run it</h4>
-    <p>5 minutes to fill the prediction table (relative values are fine: "goes up/down/flat"). Then run (~15 s). If some laptops have only 4 threads, pair them with others or use the instructor numbers on the next slide.</p>
-    <h4>Also run in parallel</h4>
-    <p>Pairs with ≥ 4 cores: <code>false_sharing.cpp</code> (optional, ~12 s). Everyone: <code>locality_bench.cpp</code> (~3 s). Compare with the slides in Part 3.</p>
-  </aside>
-</section>
+</div>
 
+</section>
 <section class="slide">
-  <h2>E1 results: sharding helps — until the workload is skewed</h2>
-  <div class="cols">
-    <table class="tight small">
-      <tr><th>M ops/s</th><th class="num">1</th><th class="num">2</th><th class="num">4</th><th class="num">8</th></tr>
-      <tr><td>uniform, global</td><td class="num">40.6</td><td class="num">20.6</td><td class="num">20.4</td><td class="num">8.3</td></tr>
-      <tr><td>uniform, sharded</td><td class="num">33.4</td><td class="num">34.3</td><td class="num">55.7</td><td class="num"><strong>64.4</strong></td></tr>
-      <tr><td>hot key, global</td><td class="num">40.5</td><td class="num">22.5</td><td class="num">22.6</td><td class="num">11.5</td></tr>
-      <tr><td>hot key, sharded</td><td class="num">27.2</td><td class="num">16.5</td><td class="num">14.9</td><td class="num"><strong>12.0</strong></td></tr>
-    </table>
-    <div class="small">
-      <ul>
-        <li>Global lock: <strong>more threads, less throughput</strong></li>
-        <li>Sharded, uniform: 7.8× the global lock at 8 threads — but only 1.9× its own 1-thread rate</li>
-        <li>Hot key: sharded ≈ global</li>
-        <li>1 thread: sharded is <strong>slower</strong></li>
-      </ul>
-    </div>
-  </div>
-  <p class="xsmall muted">Median of 3, i7-11800H, Windows 11, MinGW g++ 15 -O2 + winpthreads mutex. Other OS/mutex implementations change the shape.</p>
-  <aside class="notes">
-    <p><span class="t">01:55</span></p>
-    <h4>Explain each observation</h4>
-    <ul>
-      <li><strong>Global lock declines</strong>: every operation needs the one lock line; handing it between cores costs more than the tiny critical section. More threads = more handoffs = less work done.</li>
-      <li><strong>Sharded is far from linear</strong>: 10% writes, hashing, memory traffic of 100k-key maps, and turbo frequency dropping with more active cores. 8 threads ≠ 8× work capacity.</li>
-      <li><strong>Hot key</strong>: 90% of operations take shard 0's lock. Sharding spreads keys, not load — the workload defeats the design (Lecture 3's lesson in a new form).</li>
-      <li><strong>1 thread</strong>: sharding costs an extra hash and a larger cache footprint (64 maps). Sophistication is not free when there is no contention.</li>
-    </ul>
-    <h4>Portability finding (tell students)</h4>
-    <p>Adding <code>--rwlock</code> measures <code>std::shared_mutex</code>. On this MinGW build it ran at 0.1–0.6 M ops/s — 60–400× slower than a plain mutex, even for 90% reads. On Linux/glibc it behaves very differently. A performance conclusion about "RW locks" from one platform does not transfer.</p>
-  </aside>
+<h2>E1 results: sharding helps — until the workload is skewed</h2>
+<div class="cols">
+<table class="tight small">
+<tr><th>M ops/s</th><th class="num">1</th><th class="num">2</th><th class="num">4</th><th class="num">8</th></tr>
+<tr><td>uniform, global</td><td class="num">40.6</td><td class="num">20.6</td><td class="num">20.4</td><td class="num">8.3</td></tr>
+<tr><td>uniform, sharded</td><td class="num">33.4</td><td class="num">34.3</td><td class="num">55.7</td><td class="num"><strong>64.4</strong></td></tr>
+<tr><td>hot key, global</td><td class="num">40.5</td><td class="num">22.5</td><td class="num">22.6</td><td class="num">11.5</td></tr>
+<tr><td>hot key, sharded</td><td class="num">27.2</td><td class="num">16.5</td><td class="num">14.9</td><td class="num"><strong>12.0</strong></td></tr>
+</table>
+<div class="small">
+<ul>
+<li>Global lock: <strong>more threads, less throughput</strong></li>
+<li>Sharded, uniform: 7.8× the global lock at 8 threads — but only 1.9× its own 1-thread rate</li>
+<li>Hot key: sharded ≈ global</li>
+<li>1 thread: sharded is <strong>slower</strong></li>
+</ul>
+</div>
+</div>
+<p class="xsmall muted">Median of 3, i7-11800H, Windows 11, MinGW g++ 15 -O2 + winpthreads mutex. Other OS/mutex implementations change the shape.</p>
+
 </section>
 
-<!-- ====================== PART 5 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 5 · 02:20–02:40</span>
-  <h1>Testing concurrent code</h1>
+<span class="kicker">Part 5 · 02:20–02:40</span>
+<h1>Testing concurrent code</h1>
 </section>
-
 <section class="slide">
-  <h2>What a stress test shows</h2>
-  <table class="tight small">
-    <tr><th>API</th><th class="num">keys</th><th class="num">threads</th><th class="num">runs with lost updates (of 20)</th><th class="num">max lost</th></tr>
-    <tr><td><code>increment()</code></td><td class="num">16 / 100,000</td><td class="num">4, 8</td><td class="num">0</td><td class="num">0</td></tr>
-    <tr><td><code>put(get()+1)</code></td><td class="num">16</td><td class="num">8</td><td class="num">20</td><td class="num">45,682</td></tr>
-    <tr><td><code>put(get()+1)</code></td><td class="num">100,000</td><td class="num">4</td><td class="num"><strong>18</strong></td><td class="num"><strong>5</strong></td></tr>
-  </table>
-  <div class="cols small" style="margin-top:12px">
-    <ul>
-      <li>With a wide key space the bug shows up as a handful of lost updates in 200,000 — and not in every run</li>
-      <li>"20 runs passed" is <strong>evidence, never proof</strong></li>
-    </ul>
-    <ul>
-      <li>ThreadSanitizer is <strong>silent</strong> here: no data race, every access is locked</li>
-      <li>The bug is in the <strong>API</strong>, not in the synchronisation</li>
-    </ul>
-  </div>
-  <aside class="notes">
-    <p><span class="t">02:20</span></p>
-    <h4>Say</h4>
-    <p>"Tests of concurrent code find bugs by making unlikely interleavings likely. Low contention (many keys, few threads, fast machines) makes them unlikely again. Production hot keys create the contention your test setup lacked."</p>
-    <h4>Techniques, with limits</h4>
-    <ul>
-      <li><strong>Stress tests with invariant checks</strong>: sum of counts = operations performed. Make contention high on purpose (few keys, more threads than cores, random sleeps/yields).</li>
-      <li><strong>Repeated randomized runs</strong>: increase probability, not certainty.</li>
-      <li><strong>ThreadSanitizer</strong> (<code>-fsanitize=thread</code>, Linux/macOS with GCC/Clang): finds data races that actually happen in the run, with low false positives; blind to atomicity violations and to races on paths not executed. Not available with this MinGW toolchain — say so.</li>
-      <li><strong>Deterministic testing / model checking</strong> (e.g. controlled schedulers, CHESS-style tools, Loom in Rust): explore interleavings systematically for small tests — powerful, limited to small state spaces.</li>
-      <li><strong>Reproduction</strong>: log thread ids and operation sequences; record seeds; a failure you cannot reproduce is a failure you cannot fix.</li>
-    </ul>
-  </aside>
-</section>
+<h2>What a stress test shows</h2>
+<table class="tight small">
+<tr><th>API</th><th class="num">keys</th><th class="num">threads</th><th class="num">runs with lost updates (of 20)</th><th class="num">max lost</th></tr>
+<tr><td><code>increment()</code></td><td class="num">16 / 100,000</td><td class="num">4, 8</td><td class="num">0</td><td class="num">0</td></tr>
+<tr><td><code>put(get()+1)</code></td><td class="num">16</td><td class="num">8</td><td class="num">20</td><td class="num">45,682</td></tr>
+<tr><td><code>put(get()+1)</code></td><td class="num">100,000</td><td class="num">4</td><td class="num"><strong>18</strong></td><td class="num"><strong>5</strong></td></tr>
+</table>
+<div class="cols small" style="margin-top:12px">
+<ul>
+<li>With a wide key space the bug shows up as a handful of lost updates in 200,000 — and not in every run</li>
+<li>"20 runs passed" is <strong>evidence, never proof</strong></li>
+</ul>
+<ul>
+<li>ThreadSanitizer is <strong>silent</strong> here: no data race, every access is locked</li>
+<li>The bug is in the <strong>API</strong>, not in the synchronisation</li>
+</ul>
+</div>
 
+</section>
 <section class="slide">
-  <h2>How to argue a concurrent design is correct</h2>
-  <div class="cols small">
-    <div>
-      <ol>
-        <li>State the invariants and which lock protects each piece of data</li>
-        <li>Make compound operations atomic in the API</li>
-        <li>Keep critical sections small and lock order fixed</li>
-        <li>Prefer immutability and ownership transfer to sharing</li>
-        <li>Test under forced contention; run sanitizers where available</li>
-        <li>Review: every shared variable has exactly one synchronisation story</li>
-      </ol>
-    </div>
-    <div class="box warn">
-      <span class="label">Warning signs in a code review</span>
-      <ul class="xsmall">
-        <li>"It's only a counter, it doesn't need a lock"</li>
-        <li><code>volatile</code> used for thread communication</li>
-        <li>Memory orderings weaker than default without a written argument</li>
-        <li>A <code>get</code> followed by a <code>put</code> on shared state</li>
-        <li>"We ran it 1,000 times"</li>
-      </ul>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">02:32</span></p>
-    <h4>Teaching point</h4>
-    <p>"For concurrent code, the argument comes first and the tests second. Tests check that the argument matches the implementation; they cannot replace it."</p>
-    <h4><code>volatile</code></h4>
-    <p>In C++, <code>volatile</code> is for memory-mapped I/O, not threads: it provides neither atomicity nor ordering. Using it for flags is a data race and UB.</p>
-  </aside>
+<h2>How to argue a concurrent design is correct</h2>
+<div class="cols small">
+<div>
+<ol>
+<li>State the invariants and which lock protects each piece of data</li>
+<li>Make compound operations atomic in the API</li>
+<li>Keep critical sections small and lock order fixed</li>
+<li>Prefer immutability and ownership transfer to sharing</li>
+<li>Test under forced contention; run sanitizers where available</li>
+<li>Review: every shared variable has exactly one synchronisation story</li>
+</ol>
+</div>
+<div class="box warn">
+<span class="label">Warning signs in a code review</span>
+<ul class="xsmall">
+<li>"It's only a counter, it doesn't need a lock"</li>
+<li><code>volatile</code> used for thread communication</li>
+<li>Memory orderings weaker than default without a written argument</li>
+<li>A <code>get</code> followed by a <code>put</code> on shared state</li>
+<li>"We ran it 1,000 times"</li>
+</ul>
+</div>
+</div>
+
 </section>
 
-<!-- ====================== PART 6 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 6 · 02:40–03:00</span>
-  <h1>Benchmark-quality clinic<br>Checkpoint due tonight</h1>
+<span class="kicker">Part 6 · 02:40–03:00</span>
+<h1>Benchmark-quality clinic<br/>Checkpoint due tonight</h1>
 </section>
-
 <section class="slide">
-  <h2>Six questions for every team</h2>
-  <div class="cols small">
-    <ol>
-      <li>What exact <strong>claim</strong> are you evaluating?</li>
-      <li>What variables are <strong>controlled</strong> (machine, compiler, flags, allocator, threads, seeds)?</li>
-      <li>What <strong>workload distributions</strong> (uniform, skewed, trace)?</li>
-      <li>What <strong>baseline</strong> exists?</li>
-      <li>What <strong>measurements</strong> are collected (median, p99, throughput, memory)?</li>
-      <li>What does the experiment <strong>not</strong> prove?</li>
-    </ol>
-    <div class="box key">
-      <span class="label">Due today, Sat 5 Dec, 23:59 Cairo</span>
-      Testing + benchmarking checkpoint: tests (incl. differential/randomized), benchmark harness, first raw results with environment, draft <code>docs/evaluation.md</code>.<br><span class="xsmall">Tag <code>checkpoint-evidence</code>; repo URL + commit on Classroom.</span>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">02:40</span></p>
-    <h4>Run the clinic (15 min)</h4>
-    <p>Teams answer the six questions in writing for their main experiment. Then pick two teams to read their answer to question 6 aloud; the class adds one missing limitation each.</p>
-    <h4>What to push on</h4>
-    <ul>
-      <li>Teams with concurrency in their project: did they test a skewed workload? Report the core count?</li>
-      <li>Teams with single-threaded components: did they measure at sizes beyond the cache (locality table)?</li>
-      <li>Everyone: are raw results committed, and could someone rerun them from the README?</li>
-    </ul>
-    <p>Lecture 12 next week goes deep on methodology; tonight's checkpoint is the draft that Lecture 12 will improve.</p>
-  </aside>
-</section>
+<h2>Six questions for every team</h2>
+<div class="cols small">
+<ol>
+<li>What exact <strong>claim</strong> are you evaluating?</li>
+<li>What variables are <strong>controlled</strong> (machine, compiler, flags, allocator, threads, seeds)?</li>
+<li>What <strong>workload distributions</strong> (uniform, skewed, trace)?</li>
+<li>What <strong>baseline</strong> exists?</li>
+<li>What <strong>measurements</strong> are collected (median, p99, throughput, memory)?</li>
+<li>What does the experiment <strong>not</strong> prove?</li>
+</ol>
+<div class="box key">
+<span class="label">Due today, Sat 5 Dec, 23:59 Cairo</span>
+      Testing + benchmarking checkpoint: tests (incl. differential/randomized), benchmark harness, first raw results with environment, draft <code>docs/evaluation.md</code>.<br/><span class="xsmall">Tag <code>checkpoint-evidence</code>; repo URL + commit on Classroom.</span>
+</div>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Summary</h2>
-  <ol>
-    <li>Concurrent correctness = invariants at every observable point, and atomic compound operations.</li>
-    <li>Data races are UB; atomicity violations are API bugs that race detectors do not see.</li>
-    <li>Global locks serialise and then degrade; sharding helps uniform load, not hot keys.</li>
-    <li>Lock-free changes who waits, not whether contention exists — and adds ABA and reclamation problems.</li>
-    <li>Cache lines, false sharing and pointer chasing can matter more than Big-O (12× and 130× today).</li>
-    <li>Every number is machine-specific: report the hardware, OS, compiler and allocator.</li>
-  </ol>
-  <p class="small muted">Next: Lecture 12 · Sat 12 Dec — Benchmarking, Profiling and Experimental Methodology · <strong>Individual Engineering Analysis due 12 Dec</strong>.</p>
-  <aside class="notes"><p>Exit question: "Which shared data in your project is written by more than one thread, and what protects it?"</p></aside>
-</section>
+<h2>Summary</h2>
+<ol>
+<li>Concurrent correctness = invariants at every observable point, and atomic compound operations.</li>
+<li>Data races are UB; atomicity violations are API bugs that race detectors do not see.</li>
+<li>Global locks serialise and then degrade; sharding helps uniform load, not hot keys.</li>
+<li>Lock-free changes who waits, not whether contention exists — and adds ABA and reclamation problems.</li>
+<li>Cache lines, false sharing and pointer chasing can matter more than Big-O (12× and 130× today).</li>
+<li>Every number is machine-specific: report the hardware, OS, compiler and allocator.</li>
+</ol>
+<p class="small muted">Next: Lecture 12 · Sat 12 Dec — Benchmarking, Profiling and Experimental Methodology · <strong>Individual Engineering Analysis due 12 Dec</strong>.</p>
 
+</section>
 <script src="../common/slides.js"></script>
 </body>
 </html>

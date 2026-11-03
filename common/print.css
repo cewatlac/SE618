@@ -1,0 +1,26 @@
+/* SE618 print / Save-as-PDF.
+   Default: one slide per landscape page, no notes (safe to share with students).
+   body.print-notes: instructor handout, A4 portrait, reduced slide + full notes. */
+@media print{
+  @page{size:1280px 720px;margin:0}
+  html,body{background:#fff!important;overflow:visible!important;height:auto}
+  #toolbar,#notes-panel,#jump,#progress,#blackout,#pv-top,#pv-next{display:none!important}
+  #viewport{position:static!important;overflow:visible!important}
+  .slide{display:block!important;position:relative!important;left:auto;top:auto;margin:0!important;transform:none!important;
+    box-shadow:none!important;break-after:page;page-break-after:always;overflow:hidden}
+  .slide:last-child{break-after:auto}
+  .slide>aside.notes{display:none!important}
+  .slide[data-overflow]::after{display:none}
+  .frame pre,.box,.frame th,.slide.divider>.frame,.slide.title>.frame{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+
+  @page notes{size:A4 portrait;margin:12mm}
+  body.print-notes .slide{page:notes;width:auto!important;height:auto!important;break-after:page}
+  body.print-notes .slide>.frame{position:relative;inset:auto;width:1280px;height:720px;zoom:.54;border:1px solid #bbb}
+  body.print-notes .slide>aside.notes{display:block!important;font-size:10.5pt;line-height:1.42;margin-top:10px;color:#111}
+  body.print-notes .slide>aside.notes::before{content:"INSTRUCTOR NOTES";display:block;font-size:8pt;font-weight:700;letter-spacing:1.5px;color:#9a5b00;margin-bottom:4px}
+  body.print-notes aside.notes h4{font-size:9pt;text-transform:uppercase;letter-spacing:.8px;margin:8px 0 2px;color:#14304a}
+  body.print-notes aside.notes p,body.print-notes aside.notes ul,body.print-notes aside.notes ol{margin:0 0 5px}
+  body.print-notes aside.notes pre{font-size:8.5pt;white-space:pre-wrap}
+  body.print-notes aside.notes .t{font-weight:700;color:#14304a}
+  body.print-notes aside.notes table{border-collapse:collapse}body.print-notes aside.notes td,body.print-notes aside.notes th{border:1px solid #ccc;padding:2px 5px}
+}

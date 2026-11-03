@@ -1,207 +1,145 @@
+<!doctype html>
 <!DOCTYPE html>
+
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1" name="viewport"/>
 <title>SE618 L3 — Caching Systems</title>
-<link rel="stylesheet" href="../common/styles.css">
-<link rel="stylesheet" href="../common/print.css">
-</head>
-<body data-course="SE618" data-lecture="Lecture 3 · Sat 10 Oct 2026">
-
+<link href="../common/styles.css" rel="stylesheet"/>
+<link href="../common/print.css" rel="stylesheet"/>
+<meta content="SE618 Lecture 3: Caching Systems: LRU, LFU and Workloads. Student-facing interactive slides." name="description"/></head>
+<body data-course="SE618" data-lecture="Lecture 3 · Sat 10 Oct 2026" data-public="true">
 <section class="slide title">
-  <span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
-  <h1>Lecture 3<br>Caching Systems: LRU, LFU and Workloads</h1>
-  <p>There is no universally best eviction policy. The workload and the product decide.</p>
-  <div class="meta">Saturday 10 October 2026 · 3 hours<br>Teams and topics should now be settled · Proposal due next Saturday, 17 Oct</div>
-  <aside class="notes">
-    <h4>Plan (3h)</h4>
-    <table><tr><td>00:00–00:20</td><td>Part 1 — Scenario: a product page that is too slow; the arithmetic of caching</td></tr>
-    <tr><td>00:20–01:00</td><td>Part 2 — Locality, metrics, LRU and LFU designs and invariants</td></tr>
-    <tr><td>01:00–01:30</td><td>Part 3 — Product semantics: TTL, staleness, stampedes, capacity, concurrency</td></tr>
-    <tr><td>01:30–01:40</td><td>Break</td></tr>
-    <tr><td>01:40–02:20</td><td>Part 4 — Hands-on: debug an LRU; predict-then-simulate five policies</td></tr>
-    <tr><td>02:20–02:45</td><td>Part 5 — Interpreting the experiment; how real teams evaluate caches</td></tr>
-    <tr><td>02:45–03:00</td><td>Part 6 — Project: settled teams, proposal next week</td></tr></table>
-    <h4>Prepare</h4>
-    <p><code>Student_Resources/</code>: <code>cache_policies.hpp</code> (FIFO, LRU, LFU, SLRU, Random), <code>cache_sim.cpp</code> (4 workloads, ~5 s), <code>buggy_lru.hpp</code> + <code>lru_test.cpp</code>. Solution: <code>Instructor_Only/Lecture_03/lru_cache.hpp</code> (do not upload before class ends). Print the prediction sheet (slide "Predict before you run") or have students copy it.</p>
-  </aside>
-</section>
+<span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
+<h1>Lecture 3<br/>Caching Systems: LRU, LFU and Workloads</h1>
+<p>There is no universally best eviction policy. The workload and the product decide.</p>
+<div class="meta">Saturday 10 October 2026 · 3 hours<br/>Teams and topics should now be settled · Proposal due next Saturday, 17 Oct</div>
 
+</section>
 <section class="slide">
-  <h2>Where we are</h2>
-  <div class="cols">
-    <div class="small">
-      <h3>So far</h3>
-      <ul>
-        <li>L1: requirements → contract → evidence</li>
-        <li>L2: "O(1)" depends on keys, load, deletion, layout, adversaries</li>
-      </ul>
-      <h3>Today</h3>
-      <p>The same map + list structure, but the hard question is no longer <em>how</em> — it is <em>which policy, for which traffic, with which staleness rules</em>.</p>
-    </div>
-    <div class="box key">
-      <span class="label">Today's distinctive lesson</span>
+<h2>Where we are</h2>
+<div class="cols">
+<div class="small">
+<h3>So far</h3>
+<ul>
+<li>L1: requirements → contract → evidence</li>
+<li>L2: "O(1)" depends on keys, load, deletion, layout, adversaries</li>
+</ul>
+<h3>Today</h3>
+<p>The same map + list structure, but the hard question is no longer <em>how</em> — it is <em>which policy, for which traffic, with which staleness rules</em>.</p>
+</div>
+<div class="box key">
+<span class="label">Today's distinctive lesson</span>
       Cache effectiveness is a property of the <strong>policy × workload × product semantics</strong>, not of the policy alone. Every policy has a workload that defeats it.
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:00</span> 2 minutes. Ask: "Who fixed the three defects in last week's hash map? Which one was hardest to find, and why?" Expected: D2 (tombstones in load) — invisible to functional tests.</p>
-    <p>Milestone check: every student should be in a registered team by today. Ask unregistered students to see you at the break.</p>
-  </aside>
+</div>
+
 </section>
 
-<!-- ====================== PART 1 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 1 · 00:00–00:20</span>
-  <h1>Scenario: the product page<br>is too slow</h1>
+<span class="kicker">Part 1 · 00:00–00:20</span>
+<h1>Scenario: the product page<br/>is too slow</h1>
 </section>
-
 <section class="slide">
-  <h2>The scenario</h2>
-  <div class="cols wide-l small">
-    <div>
-      <p>An e-commerce product-detail service renders pages from a pricing + inventory database.</p>
-      <ul>
-        <li>5,000 requests/s at peak; 2 million products</li>
-        <li>DB query: <strong>40 ms</strong> median; the DB saturates above <strong>1,500 queries/s</strong></li>
-        <li>SLO: page data in <strong>≤ 15 ms at p50</strong></li>
-        <li>Each service instance may use <strong>1 GB</strong> for caching; product record ≈ 2 KB</li>
-        <li>Prices change a few times a day; stock changes every few seconds for popular items</li>
-      </ul>
-    </div>
-    <div class="box q"><span class="label">Before any policy discussion</span>
+<h2>The scenario</h2>
+<div class="cols wide-l small">
+<div>
+<p>An e-commerce product-detail service renders pages from a pricing + inventory database.</p>
+<ul>
+<li>5,000 requests/s at peak; 2 million products</li>
+<li>DB query: <strong>40 ms</strong> median; the DB saturates above <strong>1,500 queries/s</strong></li>
+<li>SLO: page data in <strong>≤ 15 ms at p50</strong></li>
+<li>Each service instance may use <strong>1 GB</strong> for caching; product record ≈ 2 KB</li>
+<li>Prices change a few times a day; stock changes every few seconds for popular items</li>
+</ul>
+</div>
+<div class="box q"><span class="label">Before any policy discussion</span>
       What hit rate do we need — and for which requirement: latency or database load?</div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:03</span> Let students compute for 3 minutes; then next slide.</p>
-    <h4>Why this scenario</h4>
-    <p>It has two competing constraints (latency SLO and backend capacity), a memory budget that cannot hold everything (2M × 2 KB = 4 GB &gt; 1 GB), and data with different staleness tolerance (price vs stock). All the day's themes appear.</p>
-  </aside>
-</section>
+</div>
 
-<section class="slide">
-  <h2>The arithmetic of caching</h2>
-  <div class="cols">
-    <div class="small">
-      <p><strong>Latency</strong> (hit ≈ 0.2 ms, miss ≈ 40 ms):</p>
-      <p>E[t] = h · 0.2 + (1 − h) · 40 ≤ 15 → <strong>h ≥ 0.63</strong></p>
-      <p><strong>Database load</strong>:</p>
-      <p>(1 − h) · 5000 ≤ 1500 → <strong>h ≥ 0.70</strong></p>
-      <p><strong>Capacity</strong>: 1 GB / (2 KB + ~100 B overhead) ≈ <strong>480k products = 24%</strong> of the catalogue</p>
-    </div>
-    <div class="box warn small">
-      <span class="label">Consequences</span>
-      <ul>
-        <li>The binding constraint is DB load, not latency.</li>
-        <li>We need 70%+ of requests served from 24% of the items → only works if popularity is <strong>skewed</strong>.</li>
-        <li>A mean of 15 ms still means 30% of users wait 40 ms. Is p50 the right SLO?</li>
-      </ul>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:07</span></p>
-    <h4>Walk through</h4>
-    <ul>
-      <li>Latency: 0.2h + 40 − 40h ≤ 15 → 39.8h ≥ 25 → h ≥ 0.628.</li>
-      <li>DB: misses per second must stay under 1500 → h ≥ 0.7. Note: a cache <em>cold start</em> (deploy, restart) sends 5000 q/s to the DB — it falls over. Cache warm-up is a requirement (Part 3: stampedes).</li>
-      <li>Per-entry overhead: map node + list node + key + metadata ≈ 64–128 B; small relative to a 2 KB value but dominant for small values (e.g. caching booleans).</li>
-    </ul>
-    <h4>Point about percentiles</h4>
-    <p>With h = 0.7, the p50 is a hit (0.2 ms) but the p75 and above are misses (40 ms). Caches make latency <strong>bimodal</strong>; the mean describes nobody. The SLO should be stated as a percentile, and the cache can only fix percentiles below the hit rate.</p>
-    <h4>Transition</h4>
-    <p>"So the whole design rests on one question: is popularity skewed, and does it stay skewed? That is locality."</p>
-  </aside>
 </section>
-
 <section class="slide">
-  <h2>Why caches work at all: locality and skew</h2>
-  <div class="cols c3 small">
-    <div class="card"><h3>Temporal locality</h3><p>Recently used items are likely to be used again soon. <em>LRU bets on this.</em></p></div>
-    <div class="card"><h3>Frequency skew</h3><p>A few items get most requests (Zipf-like). <em>LFU bets on this.</em></p></div>
-    <div class="card"><h3>Spatial locality</h3><p>Neighbours of used items get used. <em>CPU caches, prefetching, pages.</em></p></div>
-  </div>
-  <div class="box plain small" style="margin-top:18px">
-    <span class="label">Zipf's law, informally</span>
+<h2>The arithmetic of caching</h2>
+<div class="cols">
+<div class="small">
+<p><strong>Latency</strong> (hit ≈ 0.2 ms, miss ≈ 40 ms):</p>
+<p>E[t] = h · 0.2 + (1 − h) · 40 ≤ 15 → <strong>h ≥ 0.63</strong></p>
+<p><strong>Database load</strong>:</p>
+<p>(1 − h) · 5000 ≤ 1500 → <strong>h ≥ 0.70</strong></p>
+<p><strong>Capacity</strong>: 1 GB / (2 KB + ~100 B overhead) ≈ <strong>480k products = 24%</strong> of the catalogue</p>
+</div>
+<div class="box warn small">
+<span class="label">Consequences</span>
+<ul>
+<li>The binding constraint is DB load, not latency.</li>
+<li>We need 70%+ of requests served from 24% of the items → only works if popularity is <strong>skewed</strong>.</li>
+<li>A mean of 15 ms still means 30% of users wait 40 ms. Is p50 the right SLO?</li>
+</ul>
+</div>
+</div>
+
+</section>
+<section class="slide">
+<h2>Why caches work at all: locality and skew</h2>
+<div class="cols c3 small">
+<div class="card"><h3>Temporal locality</h3><p>Recently used items are likely to be used again soon. <em>LRU bets on this.</em></p></div>
+<div class="card"><h3>Frequency skew</h3><p>A few items get most requests (Zipf-like). <em>LFU bets on this.</em></p></div>
+<div class="card"><h3>Spatial locality</h3><p>Neighbours of used items get used. <em>CPU caches, prefetching, pages.</em></p></div>
+</div>
+<div class="box plain small" style="margin-top:18px">
+<span class="label">Zipf's law, informally</span>
     Request probability of the item with popularity rank r ∝ 1 / r<sup>s</sup>. With s ≈ 0.9 over 100k items, the top 1% of items receive roughly 47% of requests; the top 5%, about 63%.
   </div>
-  <div class="box warn small">If there is no skew and no recency (uniform random access), <strong>no policy helps</strong>: hit rate ≈ capacity / catalogue.</div>
-  <aside class="notes">
-    <p><span class="t">00:12</span></p>
-    <h4>Say</h4>
-    <p>"Every eviction policy is a bet about the future, made from the past. LRU bets that the recent past predicts the near future. LFU bets that long-run popularity does. Both bets are sometimes wrong, and we can construct the workloads where they are."</p>
-    <h4>Evidence on skew</h4>
-    <p>Web object popularity, video views, and key-value store traces are often reported as Zipf-like with s between 0.6 and 1.0 (e.g. Breslau et al., INFOCOM 1999, for web caches). But real traces also have <em>churn</em>: popularity shifts over hours (news, sales).</p>
-    <h4>Check</h4>
-    <p>The figure: for s = 0.9, N = 100k, the share of the top 1000 ranks is H(1000, 0.9)/H(100000, 0.9) ≈ 0.47 (top 5000: ≈ 0.63). That is the <em>ceiling</em> for a cache of that size holding exactly the most popular items (an oracle). Our simulation shows 0.34–0.45 at capacity 1000 and 0.48–0.60 at 5000 — the gap to the oracle is the price of predicting popularity from the past.</p>
-  </aside>
-</section>
+<div class="box warn small">If there is no skew and no recency (uniform random access), <strong>no policy helps</strong>: hit rate ≈ capacity / catalogue.</div>
 
+</section>
 <section class="slide">
-  <h2>Metrics: what are we optimising?</h2>
-  <table class="small">
-    <tr><th>Metric</th><th>Why it matters</th><th>Trap</th></tr>
-    <tr><td>Hit rate (requests)</td><td>Fraction of requests served</td><td>Treats a 2 KB and a 2 MB object the same</td></tr>
-    <tr><td>Byte hit rate</td><td>Bandwidth / backend bytes saved</td><td>Favours big objects</td></tr>
-    <tr><td>Miss cost saved</td><td>Misses differ: 2 ms vs 400 ms queries</td><td>Needs per-key cost model</td></tr>
-    <tr><td>Latency percentiles</td><td>What users feel</td><td>Hit rate ↑ does not fix p99 above (1 − h)</td></tr>
-    <tr><td>Backend load</td><td>Protects the database</td><td>Cold starts and expiries arrive in bursts</td></tr>
-    <tr><td>Staleness served</td><td>Correctness from the user's view</td><td>Rarely measured at all</td></tr>
-  </table>
-  <aside class="notes">
-    <p><span class="t">00:16</span></p>
-    <h4>Say</h4>
-    <p>"Hit rate is the metric everybody reports and nobody's actual goal. The goal is latency, backend protection, or cost — with a bound on staleness. Choose the metric from the requirement."</p>
-    <h4>Example</h4>
-    <p>A CDN optimising byte hit rate keeps large video segments; one optimising request hit rate keeps many small thumbnails. Same infrastructure, opposite policies. Cost-aware policies (GreedyDual-Size) weigh by cost/size.</p>
-    <h4>Observability requirement</h4>
-    <p>A production cache must export at least: hits, misses, evictions, size (entries and bytes), load/fill latency, and (ideally) age of served entries. The lab's <code>CacheStats</code> is the minimal version.</p>
-  </aside>
+<h2>Metrics: what are we optimising?</h2>
+<table class="small">
+<tr><th>Metric</th><th>Why it matters</th><th>Trap</th></tr>
+<tr><td>Hit rate (requests)</td><td>Fraction of requests served</td><td>Treats a 2 KB and a 2 MB object the same</td></tr>
+<tr><td>Byte hit rate</td><td>Bandwidth / backend bytes saved</td><td>Favours big objects</td></tr>
+<tr><td>Miss cost saved</td><td>Misses differ: 2 ms vs 400 ms queries</td><td>Needs per-key cost model</td></tr>
+<tr><td>Latency percentiles</td><td>What users feel</td><td>Hit rate ↑ does not fix p99 above (1 − h)</td></tr>
+<tr><td>Backend load</td><td>Protects the database</td><td>Cold starts and expiries arrive in bursts</td></tr>
+<tr><td>Staleness served</td><td>Correctness from the user's view</td><td>Rarely measured at all</td></tr>
+</table>
+
 </section>
 
-<!-- ====================== PART 2 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 2 · 00:20–01:00</span>
-  <h1>LRU and LFU: designs,<br>invariants and costs</h1>
+<span class="kicker">Part 2 · 00:20–01:00</span>
+<h1>LRU and LFU: designs,<br/>invariants and costs</h1>
 </section>
-
 <section class="slide">
-  <h2>LRU: requirement → structure</h2>
-  <div class="cols small">
-    <div>
-      <table class="tight">
-        <tr><th>Operation</th><th>Needs</th><th>Structure</th></tr>
-        <tr><td>get(k)</td><td>Find k in O(1)</td><td>hash map</td></tr>
-        <tr><td>on hit</td><td>Move k to "most recent" in O(1)</td><td>doubly linked list + node handle</td></tr>
-        <tr><td>on full put</td><td>Find and remove the least recent in O(1)</td><td>list tail</td></tr>
-      </table>
-      <p style="margin-top:12px">Map value = iterator into the list. <code>std::list::splice</code> moves a node without invalidating any iterator.</p>
-    </div>
-    <div class="box key">
-      <span class="label">Invariants</span>
-      <ol class="xsmall">
-        <li><code>index.size() == items.size() ≤ capacity</code></li>
-        <li>For each node n: <code>index[n.key] == n</code></li>
-        <li>Each key appears in exactly one node</li>
-        <li>List order = recency order (front = most recent)</li>
-        <li>hits + misses = number of get calls</li>
-      </ol>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:20</span></p>
-    <h4>Say</h4>
-    <p>"You all know this structure. It is the same shape as Lecture 1's RecentSet — map + list — but with <em>recency refresh on read</em>, which RecentSet deliberately did not do. Same data structure, different contract, different product."</p>
-    <h4>Why a list, not a vector or deque?</h4>
-    <p>We need O(1) removal from the middle and stable handles. <code>std::list::splice</code> relinks a node in O(1) and all iterators remain valid — the invariant #2 depends on it. A vector would invalidate stored indices on every move.</p>
-    <h4>Cost awareness</h4>
-    <p>Per entry: list node (2 pointers + key + value) + map node (key copy + iterator + next + hash) → key stored twice, ~64+ B overhead, 2 allocations per insert. For small values, overhead exceeds payload. Production caches use intrusive lists, a single node allocation holding both, or approximations (CLOCK) that avoid the list entirely.</p>
-  </aside>
+<h2>LRU: requirement → structure</h2>
+<div class="cols small">
+<div>
+<table class="tight">
+<tr><th>Operation</th><th>Needs</th><th>Structure</th></tr>
+<tr><td>get(k)</td><td>Find k in O(1)</td><td>hash map</td></tr>
+<tr><td>on hit</td><td>Move k to "most recent" in O(1)</td><td>doubly linked list + node handle</td></tr>
+<tr><td>on full put</td><td>Find and remove the least recent in O(1)</td><td>list tail</td></tr>
+</table>
+<p style="margin-top:12px">Map value = iterator into the list. <code>std::list::splice</code> moves a node without invalidating any iterator.</p>
+</div>
+<div class="box key">
+<span class="label">Invariants</span>
+<ol class="xsmall">
+<li><code>index.size() == items.size() ≤ capacity</code></li>
+<li>For each node n: <code>index[n.key] == n</code></li>
+<li>Each key appears in exactly one node</li>
+<li>List order = recency order (front = most recent)</li>
+<li>hits + misses = number of get calls</li>
+</ol>
+</div>
+</div>
+
 </section>
-
 <section class="slide">
-  <h2>LRU: the core in C++</h2>
-  <pre class="sm"><code>std::optional&lt;V&gt; get(const K&amp; k) {
+<h2>LRU: the core in C++</h2>
+<pre class="sm"><code>std::optional&lt;V&gt; get(const K&amp; k) {
     auto it = index_.find(k);
     if (it == index_.end()) { ++stats_.misses; return std::nullopt; }
     ++stats_.hits;
@@ -223,453 +161,297 @@ void put(const K&amp; k, V v) {
     items_.emplace_front(k, std::move(v));
     index_[k] = items_.begin();
 }</code></pre>
-  <aside class="notes">
-    <p><span class="t">00:27</span></p>
-    <h4>Teaching sequence</h4>
-    <p>Do not dwell — they can write this. Point to three engineering decisions:</p>
-    <ol>
-      <li><code>get</code> returns a <em>copy</em> in an <code>optional</code>, not a reference: a reference would dangle when another <code>put</code> evicts the entry (Lecture 1's lifetime point). For 2 KB values, copy cost is real; alternatives: <code>shared_ptr&lt;const V&gt;</code> (shared ownership, readers keep evicted values alive safely).</li>
-      <li><code>get</code> <strong>mutates</strong> the structure. Therefore it cannot be <code>const</code>, and in a concurrent setting a read needs a write lock. This is the key concurrency fact of LRU (Part 3).</li>
-      <li>The update path in <code>put</code> is where hand-written LRUs usually break. The lab has exactly such a bug.</li>
-    </ol>
-    <h4>Don't show during the lab</h4>
-    <p>This slide is effectively the fix for the lab. If you prefer, skip it now and show it in the debrief.</p>
-  </aside>
-</section>
 
+</section>
 <section class="slide">
-  <h2>LFU in O(1): frequency buckets</h2>
-  <div class="cols wide-r">
-    <div class="small">
-      <ul>
-        <li><code>entry: key → (freq, iterator)</code></li>
-        <li><code>by_freq: freq → list of keys</code> (LRU order within a frequency)</li>
-        <li><code>min_freq</code>: bucket to evict from</li>
-      </ul>
-      <p>On hit: move key from list f to list f+1; if list f emptied and f == min_freq, min_freq++.</p>
-      <p>On insert: freq = 1, min_freq = 1.</p>
-    </div>
-    <svg viewBox="0 0 600 300">
-      <g font-size="16" font-family="Consolas,monospace">
-        <text x="10" y="30" fill="#46505e">freq</text>
-        <rect x="10" y="45" width="60" height="44" fill="#14304a"/><text x="32" y="73" fill="#fff">1</text>
-        <rect x="10" y="125" width="60" height="44" fill="#14304a"/><text x="32" y="153" fill="#fff">3</text>
-        <rect x="10" y="205" width="60" height="44" fill="#14304a"/><text x="28" y="233" fill="#fff">17</text>
-        <rect x="110" y="45" width="80" height="44" rx="6" fill="#e3f1f2" stroke="#0b6e75"/><text x="132" y="73">k9</text>
-        <rect x="220" y="45" width="80" height="44" rx="6" fill="#e3f1f2" stroke="#0b6e75"/><text x="242" y="73">k4</text>
-        <rect x="330" y="45" width="80" height="44" rx="6" fill="#fde2e2" stroke="#a3262a"/><text x="352" y="73">k2</text>
-        <rect x="110" y="125" width="80" height="44" rx="6" fill="#e3f1f2" stroke="#0b6e75"/><text x="132" y="153">k7</text>
-        <rect x="110" y="205" width="80" height="44" rx="6" fill="#e3f1f2" stroke="#0b6e75"/><text x="132" y="233">k1</text>
-        <rect x="220" y="205" width="80" height="44" rx="6" fill="#e3f1f2" stroke="#0b6e75"/><text x="242" y="233">k5</text>
-      </g>
-      <g stroke="#0b6e75" stroke-width="2"><line x1="70" y1="67" x2="110" y2="67"/><line x1="190" y1="67" x2="220" y2="67"/><line x1="300" y1="67" x2="330" y2="67"/><line x1="70" y1="147" x2="110" y2="147"/><line x1="70" y1="227" x2="110" y2="227"/><line x1="190" y1="227" x2="220" y2="227"/></g>
-      <text x="430" y="60" font-size="15" fill="#a3262a">victim: min_freq=1,</text>
-      <text x="430" y="80" font-size="15" fill="#a3262a">least recent in list</text>
-      <text x="330" y="290" font-size="15" fill="#46505e">k1, k5: popular last week</text>
-    </svg>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:35</span></p>
-    <h4>Explain</h4>
-    <p>Reference: Shah, Mitra, Matani, "An O(1) algorithm for implementing the LFU cache eviction scheme" (2010). Our <code>LfuPolicy</code> in <code>cache_policies.hpp</code> implements it with an <code>unordered_map&lt;freq, list&gt;</code>.</p>
-    <h4>Why min_freq only ever needs +1 on hit</h4>
-    <p>A hit moves one key from f to f+1. If bucket f becomes empty and it was the minimum, the new minimum is f+1 (the key we just moved is there). An insert resets min_freq to 1. So no search is needed — O(1).</p>
-    <h4>Point at the bottom-right label</h4>
-    <p>k1 and k5 have frequency 17 because they were popular last week. They will never be evicted while new items keep entering at freq 1 and being evicted first. This is <strong>cache pollution by stale popularity</strong> — LFU's classic failure, and the reason for aging/decay (halve all counters periodically) or windowed frequency (W-TinyLFU in Caffeine).</p>
-    <h4>Second failure: new-item starvation</h4>
-    <p>A newly popular item enters at freq 1 and competes with every one-hit wonder; it can be evicted before it accumulates enough hits. SLRU and W-TinyLFU address this with a small "window" or probation segment.</p>
-  </aside>
-</section>
+<h2>LFU in O(1): frequency buckets</h2>
+<div class="cols wide-r">
+<div class="small">
+<ul>
+<li><code>entry: key → (freq, iterator)</code></li>
+<li><code>by_freq: freq → list of keys</code> (LRU order within a frequency)</li>
+<li><code>min_freq</code>: bucket to evict from</li>
+</ul>
+<p>On hit: move key from list f to list f+1; if list f emptied and f == min_freq, min_freq++.</p>
+<p>On insert: freq = 1, min_freq = 1.</p>
+</div>
+<svg viewbox="0 0 600 300">
+<g font-family="Consolas,monospace" font-size="16">
+<text fill="#46505e" x="10" y="30">freq</text>
+<rect fill="#14304a" height="44" width="60" x="10" y="45"></rect><text fill="#fff" x="32" y="73">1</text>
+<rect fill="#14304a" height="44" width="60" x="10" y="125"></rect><text fill="#fff" x="32" y="153">3</text>
+<rect fill="#14304a" height="44" width="60" x="10" y="205"></rect><text fill="#fff" x="28" y="233">17</text>
+<rect fill="#e3f1f2" height="44" rx="6" stroke="#0b6e75" width="80" x="110" y="45"></rect><text x="132" y="73">k9</text>
+<rect fill="#e3f1f2" height="44" rx="6" stroke="#0b6e75" width="80" x="220" y="45"></rect><text x="242" y="73">k4</text>
+<rect fill="#fde2e2" height="44" rx="6" stroke="#a3262a" width="80" x="330" y="45"></rect><text x="352" y="73">k2</text>
+<rect fill="#e3f1f2" height="44" rx="6" stroke="#0b6e75" width="80" x="110" y="125"></rect><text x="132" y="153">k7</text>
+<rect fill="#e3f1f2" height="44" rx="6" stroke="#0b6e75" width="80" x="110" y="205"></rect><text x="132" y="233">k1</text>
+<rect fill="#e3f1f2" height="44" rx="6" stroke="#0b6e75" width="80" x="220" y="205"></rect><text x="242" y="233">k5</text>
+</g>
+<g stroke="#0b6e75" stroke-width="2"><line x1="70" x2="110" y1="67" y2="67"></line><line x1="190" x2="220" y1="67" y2="67"></line><line x1="300" x2="330" y1="67" y2="67"></line><line x1="70" x2="110" y1="147" y2="147"></line><line x1="70" x2="110" y1="227" y2="227"></line><line x1="190" x2="220" y1="227" y2="227"></line></g>
+<text fill="#a3262a" font-size="15" x="430" y="60">victim: min_freq=1,</text>
+<text fill="#a3262a" font-size="15" x="430" y="80">least recent in list</text>
+<text fill="#46505e" font-size="15" x="330" y="290">k1, k5: popular last week</text>
+</svg>
+</div>
 
+</section>
 <section class="slide">
-  <h2>More policies: each is a different bet</h2>
-  <table class="small">
-    <tr><th>Policy</th><th>Bet</th><th>Defeated by</th><th>Cost</th></tr>
-    <tr><td>FIFO</td><td>Age ≈ usefulness</td><td>Hot items evicted on schedule</td><td>Lowest; no work on hit</td></tr>
-    <tr><td>LRU</td><td>Recent ⇒ soon again</td><td>Scans; loops slightly larger than cache</td><td>List update on every hit</td></tr>
-    <tr><td>LFU</td><td>Popular ⇒ popular</td><td>Shifting popularity (stale counts)</td><td>More metadata; aging needed</td></tr>
-    <tr><td>SLRU / 2Q</td><td>Seen twice ⇒ worth protecting</td><td>Items that are hot only once</td><td>Two lists; a tuning knob</td></tr>
-    <tr><td>Random</td><td>No bet</td><td>Strong skew (keeps nothing special)</td><td>Minimal; no per-hit work</td></tr>
-    <tr><td>CLOCK</td><td>≈ LRU</td><td>As LRU</td><td>One bit per entry; no list moves</td></tr>
-  </table>
-  <aside class="notes">
-    <p><span class="t">00:43</span></p>
-    <h4>Notes per row</h4>
-    <ul>
-      <li><strong>LRU and loops</strong>: cyclic access over C+1 items with capacity C: every access misses, because the item needed next is always the one just evicted. Common in practice: iterating a table slightly larger than the buffer pool (databases call this "sequential flooding").</li>
-      <li><strong>SLRU</strong>: new items enter probation; a second hit promotes them to protected. One-time scans cycle through probation only. Used in many buffer managers; 2Q (Johnson &amp; Shasha, VLDB 1994) is a close relative.</li>
-      <li><strong>Random</strong>: seems naive but is robust — no pathological pattern, no per-hit bookkeeping (important under concurrency). Redis's "LRU" is actually sampled: evict the least recent of ~5 random keys.</li>
-      <li><strong>CLOCK</strong>: a circular buffer with a reference bit; hits set the bit, the hand clears bits until it finds a 0. Approximates LRU without moving nodes — used by operating systems for page replacement.</li>
-      <li>Modern: ARC (adaptive between recency and frequency), LIRS, W-TinyLFU (Caffeine), S3-FIFO (2023, simple FIFO queues with strong results on real traces). Mention; do not teach in detail.</li>
-    </ul>
-    <h4>Transition</h4>
-    <p>"Policies decide what to keep. But a product cache has more rules than eviction: freshness, failure behavior, memory, concurrency."</p>
-  </aside>
+<h2>More policies: each is a different bet</h2>
+<table class="small">
+<tr><th>Policy</th><th>Bet</th><th>Defeated by</th><th>Cost</th></tr>
+<tr><td>FIFO</td><td>Age ≈ usefulness</td><td>Hot items evicted on schedule</td><td>Lowest; no work on hit</td></tr>
+<tr><td>LRU</td><td>Recent ⇒ soon again</td><td>Scans; loops slightly larger than cache</td><td>List update on every hit</td></tr>
+<tr><td>LFU</td><td>Popular ⇒ popular</td><td>Shifting popularity (stale counts)</td><td>More metadata; aging needed</td></tr>
+<tr><td>SLRU / 2Q</td><td>Seen twice ⇒ worth protecting</td><td>Items that are hot only once</td><td>Two lists; a tuning knob</td></tr>
+<tr><td>Random</td><td>No bet</td><td>Strong skew (keeps nothing special)</td><td>Minimal; no per-hit work</td></tr>
+<tr><td>CLOCK</td><td>≈ LRU</td><td>As LRU</td><td>One bit per entry; no list moves</td></tr>
+</table>
+
 </section>
 
-<!-- ====================== PART 3 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 3 · 01:00–01:30</span>
-  <h1>Product semantics: staleness,<br>stampedes, capacity, concurrency</h1>
+<span class="kicker">Part 3 · 01:00–01:30</span>
+<h1>Product semantics: staleness,<br/>stampedes, capacity, concurrency</h1>
 </section>
-
 <section class="slide">
-  <h2>TTL and stale data: a separate decision from eviction</h2>
-  <div class="cols small">
-    <div>
-      <p><strong>Eviction</strong> answers: <em>what to drop when full?</em><br><strong>Expiry</strong> answers: <em>when is a value no longer true enough?</em></p>
-      <table class="tight">
-        <tr><th>Data</th><th>Tolerable staleness</th><th>Mechanism</th></tr>
-        <tr><td>Product description</td><td>hours</td><td>long TTL</td></tr>
-        <tr><td>Price</td><td>seconds–minutes; legally sensitive at checkout</td><td>short TTL + invalidate on change</td></tr>
-        <tr><td>Stock</td><td>seconds; never at checkout</td><td>very short TTL or don't cache</td></tr>
-      </table>
-    </div>
-    <div class="box q">
-      <span class="label">Ask</span>
+<h2>TTL and stale data: a separate decision from eviction</h2>
+<div class="cols small">
+<div>
+<p><strong>Eviction</strong> answers: <em>what to drop when full?</em><br/><strong>Expiry</strong> answers: <em>when is a value no longer true enough?</em></p>
+<table class="tight">
+<tr><th>Data</th><th>Tolerable staleness</th><th>Mechanism</th></tr>
+<tr><td>Product description</td><td>hours</td><td>long TTL</td></tr>
+<tr><td>Price</td><td>seconds–minutes; legally sensitive at checkout</td><td>short TTL + invalidate on change</td></tr>
+<tr><td>Stock</td><td>seconds; never at checkout</td><td>very short TTL or don't cache</td></tr>
+</table>
+</div>
+<div class="box q">
+<span class="label">Ask</span>
       Expire-after-<strong>write</strong> or expire-after-<strong>access</strong> for prices? What goes wrong with the other one?
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:00</span></p>
-    <h4>Answer</h4>
-    <p>Expire-after-write (TTL measured from when the value was loaded). Expire-after-access keeps refreshing the deadline on every read: a popular product's price would <em>never</em> expire and could be stale forever. Expire-after-access is appropriate for sessions (idle timeout), not for data freshness.</p>
-    <h4>Implementation notes</h4>
-    <ul>
-      <li><strong>Lazy expiry</strong>: check the timestamp on read, treat expired as a miss. Cheap, but expired entries still occupy memory until evicted.</li>
-      <li><strong>Active expiry</strong>: a timer wheel or a min-heap by deadline, or sampling (Redis samples 20 keys with TTL ten times per second).</li>
-      <li>Same "inject the clock" design point as Lecture 1's <code>RecentWindow</code>.</li>
-    </ul>
-    <h4>Product point</h4>
-    <p>Checkout must re-read price/stock from the source of truth. The cache serves the <em>browse</em> path. Different consistency requirements per path is normal — and must be written down.</p>
-  </aside>
-</section>
+</div>
 
-<section class="slide">
-  <h2>Cache stampede (thundering herd)</h2>
-  <div class="cols wide-l small">
-    <div>
-      <p>A popular key expires (or the cache restarts). In the next 40 ms, <strong>every</strong> request for it misses and queries the database.</p>
-      <p>At 5,000 req/s on one hot product: ~200 identical DB queries before the first one returns. Across many keys after a restart: the DB falls over; it cannot recover because the cache cannot fill.</p>
-      <h3>Mitigations</h3>
-      <ul>
-        <li><strong>Request coalescing</strong> (single-flight): one loader per key; others wait</li>
-        <li><strong>Jittered TTLs</strong>: avoid synchronized expiry</li>
-        <li><strong>Early probabilistic refresh</strong> before expiry</li>
-        <li><strong>Serve stale while revalidating</strong></li>
-        <li>Warm-up before taking traffic</li>
-      </ul>
-    </div>
-    <div class="box warn">A cache that improves the average can make the system <strong>less</strong> stable: the backend is now sized for the hit rate, not for the traffic.</div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:07</span></p>
-    <h4>Say</h4>
-    <p>"This is the most important operational idea today. Once you add a cache, your database is provisioned for 30% of traffic. The cache has become a <em>load-bearing</em> component. Its failure modes are now system failure modes."</p>
-    <h4>Details</h4>
-    <ul>
-      <li><strong>Single-flight</strong> needs a per-key "loading" state: a map from key to a shared future. Data-structure consequence: entries have states (absent / loading / present / stale), not just present/absent. Invariant: at most one load in flight per key.</li>
-      <li><strong>Probabilistic early expiration</strong> ("XFetch", Vattani et al., VLDB 2015): each reader refreshes early with probability increasing as expiry nears; the expected number of concurrent refreshes stays ~1.</li>
-      <li><strong>Stale-while-revalidate</strong>: HTTP Cache-Control extension (RFC 5861). Trades staleness for availability — acceptable for descriptions, not for checkout prices.</li>
-      <li>Real incident pattern: cache cluster restart → DB overload → timeouts → retries (Lecture 1!) amplify load → outage.</li>
-    </ul>
-  </aside>
 </section>
-
 <section class="slide">
-  <h2>Capacity is bytes, not entries</h2>
-  <div class="cols small">
-    <div>
-      <ul>
-        <li>Values vary: 200 B … 200 KB. "capacity = 10,000 entries" bounds nothing.</li>
-        <li>Overhead per entry (nodes, key copies, pointers, allocator) is often 64–150 B.</li>
-        <li>Budget must include: fragmentation, rehash peak (Lecture 2), in-flight loads.</li>
-      </ul>
-      <p>Weighted capacity: evict until <code>Σ weight(entry) ≤ budget</code>. One insert may evict many entries — or be rejected.</p>
-    </div>
-    <div class="box q">
-      <span class="label">Ask</span>
+<h2>Cache stampede (thundering herd)</h2>
+<div class="cols wide-l small">
+<div>
+<p>A popular key expires (or the cache restarts). In the next 40 ms, <strong>every</strong> request for it misses and queries the database.</p>
+<p>At 5,000 req/s on one hot product: ~200 identical DB queries before the first one returns. Across many keys after a restart: the DB falls over; it cannot recover because the cache cannot fill.</p>
+<h3>Mitigations</h3>
+<ul>
+<li><strong>Request coalescing</strong> (single-flight): one loader per key; others wait</li>
+<li><strong>Jittered TTLs</strong>: avoid synchronized expiry</li>
+<li><strong>Early probabilistic refresh</strong> before expiry</li>
+<li><strong>Serve stale while revalidating</strong></li>
+<li>Warm-up before taking traffic</li>
+</ul>
+</div>
+<div class="box warn">A cache that improves the average can make the system <strong>less</strong> stable: the backend is now sized for the hit rate, not for the traffic.</div>
+</div>
+
+</section>
+<section class="slide">
+<h2>Capacity is bytes, not entries</h2>
+<div class="cols small">
+<div>
+<ul>
+<li>Values vary: 200 B … 200 KB. "capacity = 10,000 entries" bounds nothing.</li>
+<li>Overhead per entry (nodes, key copies, pointers, allocator) is often 64–150 B.</li>
+<li>Budget must include: fragmentation, rehash peak (Lecture 2), in-flight loads.</li>
+</ul>
+<p>Weighted capacity: evict until <code>Σ weight(entry) ≤ budget</code>. One insert may evict many entries — or be rejected.</p>
+</div>
+<div class="box q">
+<span class="label">Ask</span>
       A single 900 MB value arrives for a 1 GB cache. What should <code>put</code> do? Where is that decided — in code or in the contract?
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:13</span></p>
-    <h4>Expected answer</h4>
-    <p>Admitting it would evict almost everything (catastrophic hit-rate drop) for one value that may be used once. Reasonable contracts: reject values above a max size (e.g. 1% of budget) and report it via a counter; or route large objects to a separate cache. It must be in the contract, because callers will otherwise assume <code>put</code> implies a later <code>get</code> hit.</p>
-    <h4>Admission vs eviction</h4>
-    <p>This is an <strong>admission policy</strong>: deciding whether to insert at all. TinyLFU's key idea is admission: admit a new item only if its estimated frequency (from a compact sketch — Lecture 10) exceeds the eviction victim's. Admission control is often more effective than a smarter eviction policy.</p>
-    <h4>Invariant change</h4>
-    <p>With weights, the invariant becomes <code>Σ weight ≤ budget</code>, and eviction becomes a loop — the O(1) claim becomes amortised O(1) per unit of weight inserted.</p>
-  </aside>
-</section>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Thread-safety, conceptually</h2>
-  <div class="cols small">
-    <div>
-      <ul>
-        <li>LRU's <code>get</code> <strong>writes</strong> (moves a node). A read-write lock does not help: every request needs the write lock.</li>
-        <li>One mutex around the cache → all cores serialise on it. Throughput stops scaling at a few cores.</li>
-        <li>Options:
+<h2>Thread-safety, conceptually</h2>
+<div class="cols small">
+<div>
+<ul>
+<li>LRU's <code>get</code> <strong>writes</strong> (moves a node). A read-write lock does not help: every request needs the write lock.</li>
+<li>One mutex around the cache → all cores serialise on it. Throughput stops scaling at a few cores.</li>
+<li>Options:
           <ul>
-            <li><strong>Sharding</strong>: N independent caches by hash(key)</li>
-            <li><strong>Approximate recency</strong>: CLOCK bits, sampled LRU</li>
-            <li><strong>Buffered updates</strong>: record hits in a lossy buffer, apply in batches</li>
-          </ul></li>
-      </ul>
-    </div>
-    <div class="box key">
-      <span class="label">Trade</span>
+<li><strong>Sharding</strong>: N independent caches by hash(key)</li>
+<li><strong>Approximate recency</strong>: CLOCK bits, sampled LRU</li>
+<li><strong>Buffered updates</strong>: record hits in a lossy buffer, apply in batches</li>
+</ul></li>
+</ul>
+</div>
+<div class="box key">
+<span class="label">Trade</span>
       Every scalable option gives up <strong>exact</strong> LRU order. Sharding also gives up a global capacity bound per key-space region. Decide what "LRU" means in your contract.
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:20</span></p>
-    <h4>Depth for today: conceptual only</h4>
-    <p>Week 11 covers concurrency in detail. Today: recognise that sequential correctness ≠ concurrent scalability, and that "exact LRU" is an expensive promise.</p>
-    <h4>Examples</h4>
-    <ul>
-      <li>Caffeine (Java) records reads into striped ring buffers and replays them under a lock asynchronously; reads never block on the policy.</li>
-      <li>memcached uses segmented LRU with a background maintainer thread; items bumped at most once per 60 s to limit lock traffic.</li>
-      <li>Sharding: 16 shards each with capacity C/16; skewed keys can make one shard hot and another idle — per-shard hit rates differ.</li>
-    </ul>
-    <h4>Other concurrency hazard</h4>
-    <p>Returning references into the cache (instead of copies or <code>shared_ptr</code>) is a use-after-free under concurrency: another thread evicts the entry while the reader uses it.</p>
-    <h4>Transition</h4>
-    <p>"After the break: first break an LRU, then run the experiment."</p>
-  </aside>
+</div>
+
+</section>
+<section class="slide divider">
+<span class="kicker">01:30–01:40</span>
+<h1>Break — 10 minutes</h1>
+<p>Download <code>Lecture_03/Student_Resources/</code> · Teams: sit together</p>
 </section>
 
 <section class="slide divider">
-  <span class="kicker">01:30–01:40</span>
-  <h1>Break — 10 minutes</h1>
-  <p>Download <code>Lecture_03/Student_Resources/</code> · Teams: sit together</p>
+<span class="kicker">Part 4 · 01:40–02:20</span>
+<h1>Hands-on: debug, predict, simulate</h1>
+</section>
+<section class="slide">
+<h2>Activity A — Debug an LRU (15 minutes)</h2>
+<div class="cols wide-l small">
+<div>
+<p><code>buggy_lru.hpp</code> implements the contract in its header comment. It passes the "basic eviction" test.</p>
+<ol>
+<li>Build and run <code>lru_test.cpp</code>.</li>
+<li>For each failure: state the violated <strong>contract clause</strong> and the violated <strong>invariant</strong>.</li>
+<li>Fix it. Add a <code>check_invariants()</code> and call it in the differential loop.</li>
+<li>Which defect could reach production unnoticed longest? Why?</li>
+</ol>
+</div>
+<div class="box plain xsmall">
+<span class="label">Build</span>
+<code>g++ -std=c++20 -O1 -g -fsanitize=address,undefined lru_test.cpp</code><br/><br/>
+<span class="label">Reference model in the test</span>
+<code>RefLru</code>: a vector with a logical clock per key; O(n) per operation, obviously correct.
+    </div>
+</div>
+
+</section>
+<section class="slide">
+<h2>Activity B — Predict before you run (10 minutes)</h2>
+<div class="small">
+<p>Capacity 5,000; 100,000 distinct keys; 1M requests. Rank <strong>FIFO, LRU, LFU, SLRU, Random</strong> by hit rate for each workload. Write your ranking <strong>before</strong> running <code>cache_sim.cpp</code>.</p>
+<table class="tight">
+<tr><th>Workload</th><th>Description</th><th>Your ranking (best → worst)</th></tr>
+<tr><td>zipf</td><td>Zipf s = 0.9, stable popularity</td><td></td></tr>
+<tr><td>zipf+scans</td><td>Zipf + a batch job reading 10,000 one-off keys every 10,000 requests</td><td></td></tr>
+<tr><td>shifting</td><td>Zipf, but the popular set is replaced every 200,000 requests</td><td></td></tr>
+<tr><td>loop</td><td>Cyclic scan over 6,000 keys (1.2 × capacity)</td><td></td></tr>
+</table>
+</div>
+
+</section>
+<section class="slide">
+<h2>Results: hit rate on user traffic (capacity 5,000)</h2>
+<table>
+<tr><th>Workload</th><th class="num">FIFO</th><th class="num">LRU</th><th class="num">LFU</th><th class="num">SLRU</th><th class="num">Random</th></tr>
+<tr><td>zipf</td><td class="num">0.475</td><td class="num">0.515</td><td class="num"><strong>0.595</strong></td><td class="num">0.592</td><td class="num">0.476</td></tr>
+<tr><td>zipf + scans</td><td class="num">0.428</td><td class="num">0.435</td><td class="num"><strong>0.589</strong></td><td class="num">0.574</td><td class="num">0.401</td></tr>
+<tr><td>shifting</td><td class="num">0.472</td><td class="num">0.512</td><td class="num">0.276</td><td class="num"><strong>0.524</strong></td><td class="num">0.471</td></tr>
+<tr><td>loop (1.2 × C)</td><td class="num">0.000</td><td class="num">0.000</td><td class="num">0.000</td><td class="num">0.000</td><td class="num"><strong>0.698</strong></td></tr>
+</table>
+<p class="xsmall muted" style="margin-top:10px">One seed, synthetic traces, <code>Student_Resources/cache_sim.cpp</code>. Capacity 1,000 shows the same ranking pattern.</p>
+<div class="box key small">Four workloads, three different winners. The "best" policy on one workload is the worst on another.</div>
+
 </section>
 
-<!-- ====================== PART 4 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 4 · 01:40–02:20</span>
-  <h1>Hands-on: debug, predict, simulate</h1>
+<span class="kicker">Part 5 · 02:20–02:45</span>
+<h1>Interpreting the experiment</h1>
 </section>
-
 <section class="slide">
-  <h2>Activity A — Debug an LRU (15 minutes)</h2>
-  <div class="cols wide-l small">
-    <div>
-      <p><code>buggy_lru.hpp</code> implements the contract in its header comment. It passes the "basic eviction" test.</p>
-      <ol>
-        <li>Build and run <code>lru_test.cpp</code>.</li>
-        <li>For each failure: state the violated <strong>contract clause</strong> and the violated <strong>invariant</strong>.</li>
-        <li>Fix it. Add a <code>check_invariants()</code> and call it in the differential loop.</li>
-        <li>Which defect could reach production unnoticed longest? Why?</li>
-      </ol>
-    </div>
-    <div class="box plain xsmall">
-      <span class="label">Build</span>
-      <code>g++ -std=c++20 -O1 -g -fsanitize=address,undefined lru_test.cpp</code><br><br>
-      <span class="label">Reference model in the test</span>
-      <code>RefLru</code>: a vector with a logical clock per key; O(n) per operation, obviously correct.
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:40</span></p>
-    <h4>Defects (INSTRUCTOR ONLY)</h4>
-    <ol>
-      <li><strong>B1 — <code>get</code> does not refresh recency.</strong> The cache is FIFO for reads. Caught by the "recency" test. In production: hit rate silently drops (our sim: LRU 0.515 vs FIFO 0.475 on Zipf at C = 5000) — no error, just a worse number that nobody attributes to a bug.</li>
-      <li><strong>B2 — <code>put</code> of an existing key creates a second node.</strong> Also, when full, it evicts even though no new key is being added. The map points at the new node; the stale node remains in the list. Later the stale node reaches the tail and its eviction erases the <em>map entry of the live key</em> → the key vanishes although its node is still in the list; <code>index.size() != items.size()</code>; evictions over-counted; memory leaks slowly as orphaned nodes accumulate. Caught by the differential test via size mismatch (seed 3, step 6).</li>
-    </ol>
-    <h4>Answer to Q4</h4>
-    <p>B1: nothing crashes, nothing is wrong per request; only an aggregate metric is slightly worse. The only defence is a recency test written <em>from the contract</em>. B2 at least eventually shows up as missing keys/memory growth.</p>
-    <h4>Fix</h4>
-    <p>See <code>Instructor_Only/Lecture_03/lru_cache.hpp</code> or the "LRU core in C++" slide.</p>
-  </aside>
-</section>
+<h2>What the simulation shows — and what it does not</h2>
+<div class="cols small">
+<div class="card">
+<h3>Supported</h3>
+<ul>
+<li>Policy ranking depends on workload structure</li>
+<li>LFU is fragile under popularity shift</li>
+<li>LRU is fragile under scans and loops</li>
+<li>A small segmented design is robust across 3 of 4</li>
+</ul>
+</div>
+<div class="card">
+<h3>Not supported</h3>
+<ul>
+<li>That real traffic looks like these generators</li>
+<li>Latency or throughput (only hit rate)</li>
+<li>Memory overhead of each policy's metadata</li>
+<li>Behaviour under concurrency, TTLs, variable sizes</li>
+<li>Variance: one seed, no confidence intervals</li>
+</ul>
+</div>
+</div>
+<div class="box q small" style="margin-top:14px"><span class="label">Ask</span>You must pick one policy for the product-page service. What additional evidence would you collect first?</div>
 
+</section>
 <section class="slide">
-  <h2>Activity B — Predict before you run (10 minutes)</h2>
-  <div class="small">
-    <p>Capacity 5,000; 100,000 distinct keys; 1M requests. Rank <strong>FIFO, LRU, LFU, SLRU, Random</strong> by hit rate for each workload. Write your ranking <strong>before</strong> running <code>cache_sim.cpp</code>.</p>
-    <table class="tight">
-      <tr><th>Workload</th><th>Description</th><th>Your ranking (best → worst)</th></tr>
-      <tr><td>zipf</td><td>Zipf s = 0.9, stable popularity</td><td></td></tr>
-      <tr><td>zipf+scans</td><td>Zipf + a batch job reading 10,000 one-off keys every 10,000 requests</td><td></td></tr>
-      <tr><td>shifting</td><td>Zipf, but the popular set is replaced every 200,000 requests</td><td></td></tr>
-      <tr><td>loop</td><td>Cyclic scan over 6,000 keys (1.2 × capacity)</td><td></td></tr>
-    </table>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:55</span></p>
-    <h4>Why predict first</h4>
-    <p>An experiment without a prior hypothesis teaches nothing: whatever comes out looks obvious afterwards. Writing the ranking first exposes which mental models are wrong. This is the "hypothesis" section of the project proposal in miniature.</p>
-    <h4>Run it</h4>
-    <p><code>g++ -std=c++20 -O2 cache_sim.cpp -o sim &amp;&amp; ./sim</code> (~5 s). Hit rate counts user traffic only: cold-start 10% and scan requests are excluded.</p>
-    <h4>Collect predictions</h4>
-    <p>Ask for a show of hands per workload: "Who put LRU first for 'loop'?" Many will. Then reveal.</p>
-  </aside>
-</section>
+<h2>Choosing for the product-page service</h2>
+<table class="small">
+<tr><th>Requirement</th><th>Design response</th></tr>
+<tr><td>DB load: h ≥ 0.70 at 24% capacity</td><td>Policy chosen by trace simulation; miss-ratio curve to justify memory</td></tr>
+<tr><td>Nightly catalogue export (scan)</td><td>Scan-resistant policy (SLRU / W-TinyLFU) or bypass cache for batch</td></tr>
+<tr><td>Flash sales shift popularity</td><td>Avoid pure LFU; use windowed/aged frequency</td></tr>
+<tr><td>Price staleness</td><td>Expire-after-write TTL + invalidation on price change; checkout bypasses</td></tr>
+<tr><td>Restart / expiry bursts</td><td>Single-flight loading, jittered TTL, warm-up</td></tr>
+<tr><td>1 GB budget</td><td>Weighted capacity in bytes; max value size</td></tr>
+<tr><td>Many cores</td><td>Sharded cache; approximate recency</td></tr>
+</table>
 
+</section>
 <section class="slide">
-  <h2>Results: hit rate on user traffic (capacity 5,000)</h2>
-  <table>
-    <tr><th>Workload</th><th class="num">FIFO</th><th class="num">LRU</th><th class="num">LFU</th><th class="num">SLRU</th><th class="num">Random</th></tr>
-    <tr><td>zipf</td><td class="num">0.475</td><td class="num">0.515</td><td class="num"><strong>0.595</strong></td><td class="num">0.592</td><td class="num">0.476</td></tr>
-    <tr><td>zipf + scans</td><td class="num">0.428</td><td class="num">0.435</td><td class="num"><strong>0.589</strong></td><td class="num">0.574</td><td class="num">0.401</td></tr>
-    <tr><td>shifting</td><td class="num">0.472</td><td class="num">0.512</td><td class="num">0.276</td><td class="num"><strong>0.524</strong></td><td class="num">0.471</td></tr>
-    <tr><td>loop (1.2 × C)</td><td class="num">0.000</td><td class="num">0.000</td><td class="num">0.000</td><td class="num">0.000</td><td class="num"><strong>0.698</strong></td></tr>
-  </table>
-  <p class="xsmall muted" style="margin-top:10px">One seed, synthetic traces, <code>Student_Resources/cache_sim.cpp</code>. Capacity 1,000 shows the same ranking pattern.</p>
-  <div class="box key small">Four workloads, three different winners. The "best" policy on one workload is the worst on another.</div>
-  <aside class="notes">
-    <p><span class="t">02:05</span> Let the table sit for 20 seconds before speaking.</p>
-    <h4>Explain each row</h4>
-    <ul>
-      <li><strong>zipf</strong>: stable popularity → frequency is the best predictor → LFU ≈ SLRU &gt; LRU &gt; FIFO ≈ Random.</li>
-      <li><strong>zipf + scans</strong>: every scan flushes LRU and FIFO completely (10,000 one-off keys &gt; capacity), losing 8 points. LFU and SLRU protect items seen more than once. (LFU is barely affected: scan keys have freq 1 and are evicted first.)</li>
-      <li><strong>shifting</strong>: LFU collapses to 0.276 — last phase's stars keep high counts and block the new popular set. LRU adapts immediately. SLRU adapts and resists one-hit noise.</li>
-      <li><strong>loop</strong>: the pathological case. For LRU and FIFO the next needed key is always the one just evicted. LFU/SLRU also fail (every key has freq 1 when evicted). Random keeps a random ~C of the loop and hits often.</li>
-    </ul>
-    <h4>Capacity 1,000 numbers (if asked)</h4>
-    <p>zipf: FIFO .306, LRU .342, LFU .441, SLRU .445, Random .338 · shifting: LFU .138, SLRU .421 · loop: Random .852, others 0.</p>
-  </aside>
+<h2>Testing a cache: beyond "put then get"</h2>
+<table class="small">
+<tr><th>Test</th><th>Protects</th></tr>
+<tr><td>Differential vs O(n) reference with logical clock</td><td>Exact eviction order</td></tr>
+<tr><td><code>check_invariants()</code> each step (map ↔ list, size ≤ cap)</td><td>Structural corruption (B2)</td></tr>
+<tr><td>Recency test from the contract (read protects a key)</td><td>Silent policy degradation (B1)</td></tr>
+<tr><td>Stats identities: hits + misses = gets; evictions = inserts − size</td><td>Observability correctness</td></tr>
+<tr><td>TTL boundary with injected clock</td><td>Off-by-one staleness</td></tr>
+<tr><td>Hit-rate regression on a fixed trace (deterministic)</td><td>Policy changes that "still pass"</td></tr>
+</table>
+
 </section>
 
-<!-- ====================== PART 5 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 5 · 02:20–02:45</span>
-  <h1>Interpreting the experiment</h1>
+<span class="kicker">Part 6 · 02:45–03:00</span>
+<h1>Project: proposal due next Saturday</h1>
 </section>
-
 <section class="slide">
-  <h2>What the simulation shows — and what it does not</h2>
-  <div class="cols small">
-    <div class="card">
-      <h3>Supported</h3>
-      <ul>
-        <li>Policy ranking depends on workload structure</li>
-        <li>LFU is fragile under popularity shift</li>
-        <li>LRU is fragile under scans and loops</li>
-        <li>A small segmented design is robust across 3 of 4</li>
-      </ul>
-    </div>
-    <div class="card">
-      <h3>Not supported</h3>
-      <ul>
-        <li>That real traffic looks like these generators</li>
-        <li>Latency or throughput (only hit rate)</li>
-        <li>Memory overhead of each policy's metadata</li>
-        <li>Behaviour under concurrency, TTLs, variable sizes</li>
-        <li>Variance: one seed, no confidence intervals</li>
-      </ul>
-    </div>
-  </div>
-  <div class="box q small" style="margin-top:14px"><span class="label">Ask</span>You must pick one policy for the product-page service. What additional evidence would you collect first?</div>
-  <aside class="notes">
-    <p><span class="t">02:20</span></p>
-    <h4>Expected answer</h4>
-    <ol>
-      <li><strong>A real trace</strong>: log (timestamp, product ID, response size) for a day, including the nightly batch jobs and a sale event. Replay it through the simulator — <em>trace-driven simulation</em> is the industry standard for policy selection.</li>
-      <li><strong>Miss-ratio curve</strong>: hit rate vs capacity for each policy (simulate many capacities). It answers "is it worth buying more memory?" — sometimes a bigger LRU beats a smarter policy.</li>
-      <li><strong>Shadow deployment</strong>: run a second policy in production on a sample of traffic, tracking hits without serving from it.</li>
-      <li><strong>Per-op cost</strong>: LFU does more work per hit (two list operations and a hash lookup on freq); measure ns/op and memory per entry.</li>
-    </ol>
-    <h4>Also</h4>
-    <p>Results at capacity 1,000 and 5,000 agree in ranking; that is weak evidence of robustness across sizes. More capacities → miss-ratio curve.</p>
-  </aside>
-</section>
+<h2>Milestone status</h2>
+<div class="cols small">
+<div>
+<table class="tight">
+<tr><th>Date</th><th>Milestone</th></tr>
+<tr><td>03 Oct</td><td>Team + preliminary topic ✓</td></tr>
+<tr class="hl"><td>10 Oct (today)</td><td>Teams and topics settled</td></tr>
+<tr class="hl"><td>17 Oct, 23:59 Cairo</td><td><strong>Project proposal due</strong></td></tr>
+<tr><td>31 Oct, 23:59 Cairo</td><td>Architecture / design / API document</td></tr>
+<tr><td>07 Nov</td><td>Written midterm</td></tr>
+</table>
+</div>
+<div class="box key">
+<span class="label">This week</span>
+<ul class="xsmall">
+<li>Fill in <code>03_Project/templates/proposal_template.md</code></li>
+<li>Quantify the workload — find a real or published trace if you can</li>
+<li>Name ≥ 2 candidate designs + a baseline</li>
+<li>Write the hypothesis: which result would change your decision?</li>
+</ul>
+</div>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Choosing for the product-page service</h2>
-  <table class="small">
-    <tr><th>Requirement</th><th>Design response</th></tr>
-    <tr><td>DB load: h ≥ 0.70 at 24% capacity</td><td>Policy chosen by trace simulation; miss-ratio curve to justify memory</td></tr>
-    <tr><td>Nightly catalogue export (scan)</td><td>Scan-resistant policy (SLRU / W-TinyLFU) or bypass cache for batch</td></tr>
-    <tr><td>Flash sales shift popularity</td><td>Avoid pure LFU; use windowed/aged frequency</td></tr>
-    <tr><td>Price staleness</td><td>Expire-after-write TTL + invalidation on price change; checkout bypasses</td></tr>
-    <tr><td>Restart / expiry bursts</td><td>Single-flight loading, jittered TTL, warm-up</td></tr>
-    <tr><td>1 GB budget</td><td>Weighted capacity in bytes; max value size</td></tr>
-    <tr><td>Many cores</td><td>Sharded cache; approximate recency</td></tr>
-  </table>
-  <aside class="notes">
-    <p><span class="t">02:30</span></p>
-    <h4>Say</h4>
-    <p>"Notice that the eviction policy is one row out of seven. Most of the engineering of a cache is not eviction."</p>
-    <h4>Practical recommendation (if asked what to use in C++)</h4>
-    <p>For a project: implement your own policy only if the policy is your research question; otherwise wrap a simple sharded LRU and spend effort on measurement. In Java the answer is usually Caffeine; in distributed settings Redis/memcached with their built-in policies.</p>
-  </aside>
-</section>
+<h2>Summary</h2>
+<ol>
+<li>Work out the required hit rate from latency <em>and</em> backend load before choosing a policy.</li>
+<li>Every policy is a bet about the future; each has a workload that defeats it.</li>
+<li>LRU = map + list with O(1) splice; its <code>get</code> is a write — which matters for concurrency.</li>
+<li>LFU needs aging; SLRU/2Q resist scans; Random survives loops.</li>
+<li>Expiry ≠ eviction. Choose staleness per data type and per path.</li>
+<li>Caches become load-bearing: plan for stampedes, cold starts and byte budgets.</li>
+<li>Evaluate with traces and predictions, not with a single synthetic benchmark.</li>
+</ol>
+<p class="small muted">Next: Lecture 4 · Sat 17 Oct — Tries and Autocomplete Systems · <strong>Proposal due 17 Oct, 23:59 Cairo</strong>.</p>
 
-<section class="slide">
-  <h2>Testing a cache: beyond "put then get"</h2>
-  <table class="small">
-    <tr><th>Test</th><th>Protects</th></tr>
-    <tr><td>Differential vs O(n) reference with logical clock</td><td>Exact eviction order</td></tr>
-    <tr><td><code>check_invariants()</code> each step (map ↔ list, size ≤ cap)</td><td>Structural corruption (B2)</td></tr>
-    <tr><td>Recency test from the contract (read protects a key)</td><td>Silent policy degradation (B1)</td></tr>
-    <tr><td>Stats identities: hits + misses = gets; evictions = inserts − size</td><td>Observability correctness</td></tr>
-    <tr><td>TTL boundary with injected clock</td><td>Off-by-one staleness</td></tr>
-    <tr><td>Hit-rate regression on a fixed trace (deterministic)</td><td>Policy changes that "still pass"</td></tr>
-  </table>
-  <aside class="notes">
-    <p><span class="t">02:37</span></p>
-    <h4>Stats identities</h4>
-    <p>Counters are part of the contract (dashboards and alerts depend on them). The identity <code>evictions == new_inserts − size</code> (for a cache that only removes by eviction) catches B2's over-counting.</p>
-    <h4>Deterministic hit-rate regression</h4>
-    <p>Replaying a fixed trace through the policy gives an exact hit count — deterministic, unlike timing. Assert it equals the recorded value; any change to policy code that changes the number must be deliberate. Same idea as Lecture 2's "probe length" proxy.</p>
-  </aside>
 </section>
-
-<!-- ====================== PART 6 ====================== -->
-<section class="slide divider">
-  <span class="kicker">Part 6 · 02:45–03:00</span>
-  <h1>Project: proposal due next Saturday</h1>
-</section>
-
-<section class="slide">
-  <h2>Milestone status</h2>
-  <div class="cols small">
-    <div>
-      <table class="tight">
-        <tr><th>Date</th><th>Milestone</th></tr>
-        <tr><td>03 Oct</td><td>Team + preliminary topic ✓</td></tr>
-        <tr class="hl"><td>10 Oct (today)</td><td>Teams and topics settled</td></tr>
-        <tr class="hl"><td>17 Oct, 23:59 Cairo</td><td><strong>Project proposal due</strong></td></tr>
-        <tr><td>31 Oct, 23:59 Cairo</td><td>Architecture / design / API document</td></tr>
-        <tr><td>07 Nov</td><td>Written midterm</td></tr>
-      </table>
-    </div>
-    <div class="box key">
-      <span class="label">This week</span>
-      <ul class="xsmall">
-        <li>Fill in <code>03_Project/templates/proposal_template.md</code></li>
-        <li>Quantify the workload — find a real or published trace if you can</li>
-        <li>Name ≥ 2 candidate designs + a baseline</li>
-        <li>Write the hypothesis: which result would change your decision?</li>
-      </ul>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">02:45</span></p>
-    <p>Teams that are still undecided: meet them after class for 5 minutes each. Topic changes after the proposal require approval.</p>
-    <h4>If your project involves a cache</h4>
-    <p>Tell them: "Your evaluation must include at least two workloads that stress different policy assumptions, and a trace or a justification for your generator. Today's simulator is a starting point you may reuse with acknowledgement."</p>
-  </aside>
-</section>
-
-<section class="slide">
-  <h2>Summary</h2>
-  <ol>
-    <li>Work out the required hit rate from latency <em>and</em> backend load before choosing a policy.</li>
-    <li>Every policy is a bet about the future; each has a workload that defeats it.</li>
-    <li>LRU = map + list with O(1) splice; its <code>get</code> is a write — which matters for concurrency.</li>
-    <li>LFU needs aging; SLRU/2Q resist scans; Random survives loops.</li>
-    <li>Expiry ≠ eviction. Choose staleness per data type and per path.</li>
-    <li>Caches become load-bearing: plan for stampedes, cold starts and byte budgets.</li>
-    <li>Evaluate with traces and predictions, not with a single synthetic benchmark.</li>
-  </ol>
-  <p class="small muted">Next: Lecture 4 · Sat 17 Oct — Tries and Autocomplete Systems · <strong>Proposal due 17 Oct, 23:59 Cairo</strong>.</p>
-  <aside class="notes"><p>Exit question: "Which workload in your project would defeat the policy or structure you are currently planning?"</p></aside>
-</section>
-
 <script src="../common/slides.js"></script>
 </body>
 </html>

@@ -1,382 +1,285 @@
+<!doctype html>
 <!DOCTYPE html>
+
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1" name="viewport"/>
 <title>SE618 L14 — Defenses, Synthesis and Final Review</title>
-<link rel="stylesheet" href="../common/styles.css">
-<link rel="stylesheet" href="../common/print.css">
-</head>
-<body data-course="SE618" data-lecture="Lecture 14 · Sat 26 Dec 2026">
-
+<link href="../common/styles.css" rel="stylesheet"/>
+<link href="../common/print.css" rel="stylesheet"/>
+<meta content="SE618 Lecture 14: Defenses, Course Synthesis and Final Review. Student-facing interactive slides." name="description"/></head>
+<body data-course="SE618" data-lecture="Lecture 14 · Sat 26 Dec 2026" data-public="true">
 <section class="slide title">
-  <span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
-  <h1>Lecture 14<br>Defenses · Course Synthesis · Final Review</h1>
-  <p>There is no universally best data structure. There is a well-argued decision under stated conditions.</p>
-  <div class="meta">Saturday 26 December 2026<br>Defense session 2 · Synthesis module (45–60 min) · Final-exam preparation module (45–60 min)</div>
-  <aside class="notes">
-    <h4>Modular session</h4>
-    <table><tr><td>Module 0</td><td>Logistics (5 min)</td></tr>
-    <tr><td>Module A</td><td>Remaining defenses — reuse Lecture 13's format slides and the defense tools</td></tr>
-    <tr><td>Module B</td><td>Course synthesis: one evolving system, changing constraints (45–60 min)</td></tr>
-    <tr><td>Module C</td><td>Final-exam preparation: exam structure, answer pattern, practice cases (45–60 min)</td></tr></table>
-    <p>If defenses take most of the session, teach B or C in the remaining time and post the other as a PDF (Print, slides only) with <code>Final_Review_Framework.md</code> and <code>Practice_Cases.md</code>. Each module stands alone.</p>
-    <h4>Instructor files</h4>
-    <p>Model reasoning for the practice cases: <code>Instructor_Only/Lecture_14/Practice_Case_Model_Reasoning.md</code>. After the session: <code>Instructor_Only/Lecture_14/Project_Closure_Checklist.md</code>.</p>
-  </aside>
-</section>
+<span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
+<h1>Lecture 14<br/>Defenses · Course Synthesis · Final Review</h1>
+<p>There is no universally best data structure. There is a well-argued decision under stated conditions.</p>
+<div class="meta">Saturday 26 December 2026<br/>Defense session 2 · Synthesis module (45–60 min) · Final-exam preparation module (45–60 min)</div>
 
+</section>
 <section class="slide">
-  <h2>Today</h2>
-  <table>
-    <tr><td><strong>A</strong></td><td>Remaining project defenses (running order on Classroom)</td></tr>
-    <tr><td><strong>B</strong></td><td>Synthesis: engineering decisions across the whole course</td></tr>
-    <tr><td><strong>C</strong></td><td>Final exam preparation: how to reason and how to write it down</td></tr>
-  </table>
-  <p class="small muted" style="margin-top:14px">Review files: <code>Lecture_14/Student_Resources/Final_Review_Framework.md</code>, <code>Practice_Cases.md</code>.</p>
-  <aside class="notes"><p><span class="t">00:00</span> Announce the order: usually defenses first (A), then B and/or C. For Module A, open Lecture 13's slides 2–7 if students need a reminder of the format.</p></aside>
+<h2>Today</h2>
+<table>
+<tr><td><strong>A</strong></td><td>Remaining project defenses (running order on Classroom)</td></tr>
+<tr><td><strong>B</strong></td><td>Synthesis: engineering decisions across the whole course</td></tr>
+<tr><td><strong>C</strong></td><td>Final exam preparation: how to reason and how to write it down</td></tr>
+</table>
+<p class="small muted" style="margin-top:14px">Review files: <code>Lecture_14/Student_Resources/Final_Review_Framework.md</code>, <code>Practice_Cases.md</code>.</p>
+
 </section>
 
-<!-- ====================== MODULE B ====================== -->
 <section class="slide divider">
-  <span class="kicker">Module B · 45–60 min</span>
-  <h1>Synthesis: one system,<br>changing constraints</h1>
+<span class="kicker">Module B · 45–60 min</span>
+<h1>Synthesis: one system,<br/>changing constraints</h1>
 </section>
-
 <section class="slide">
-  <h2>The system: a large online marketplace</h2>
-  <div class="cols small">
-    <div>
-      <ul>
-        <li><strong>Ingestion</strong>: payment and order events, delivered at least once</li>
-        <li><strong>Search</strong> and <strong>autocomplete</strong> over 20M products</li>
-        <li><strong>Caching</strong> of product pages</li>
-        <li><strong>Analytics</strong>: range queries over time series</li>
-        <li><strong>Deployments</strong>: service dependency graph</li>
-        <li><strong>Workflows</strong>: nightly pricing and model pipelines</li>
-        <li><strong>Configuration</strong> with history and rollback</li>
-        <li><strong>Crawling / dedup</strong> of partner catalogues</li>
-        <li>Everything runs on many cores</li>
-      </ul>
-    </div>
-    <div class="box q">
-      <span class="label">Groups · 3 min</span>
+<h2>The system: a large online marketplace</h2>
+<div class="cols small">
+<div>
+<ul>
+<li><strong>Ingestion</strong>: payment and order events, delivered at least once</li>
+<li><strong>Search</strong> and <strong>autocomplete</strong> over 20M products</li>
+<li><strong>Caching</strong> of product pages</li>
+<li><strong>Analytics</strong>: range queries over time series</li>
+<li><strong>Deployments</strong>: service dependency graph</li>
+<li><strong>Workflows</strong>: nightly pricing and model pipelines</li>
+<li><strong>Configuration</strong> with history and rollback</li>
+<li><strong>Crawling / dedup</strong> of partner catalogues</li>
+<li>Everything runs on many cores</li>
+</ul>
+</div>
+<div class="box q">
+<span class="label">Groups · 3 min</span>
       Pick any two subsystems. For each, write the first design you would propose — and the <strong>one assumption</strong> it depends on most.
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">B 00:00</span></p>
-    <p>This is every lecture's scenario living in one company. Collect 4–5 answers; insist on the assumption. Keep them on the board: the next slides change the constraints and students revisit their own answers.</p>
-    <p>Do not recap lectures one by one. The whole module is organised by <em>constraints</em>, not by topics.</p>
-  </aside>
-</section>
+</div>
 
-<section class="slide">
-  <h2>Round 1 — memory</h2>
-  <div class="cols small">
-    <div class="card">
-      <h3>Memory is abundant</h3>
-      <p>What becomes acceptable that was not?</p>
-    </div>
-    <div class="card">
-      <h3>Memory is tight (10× less)</h3>
-      <p>What must change first, and what do you give up?</p>
-    </div>
-  </div>
-  <div class="box plain small" style="margin-top:14px">Apply to: dedup of event IDs · autocomplete · config history · cache capacity</div>
-  <aside class="notes">
-    <p><span class="t">B 00:06</span></p>
-    <h4>Draw out</h4>
-    <ul>
-      <li>Abundant: full copies for history (O(1) reads), cached top-k per trie node, exact sets, padding against false sharing. Simplicity becomes affordable.</li>
-      <li>Tight: binary keys instead of strings (L1: 3.6 → 1.7 GB), flat layouts instead of node-based maps (L2), sorted arrays instead of pointer tries (L4, 6× less), deltas/structural sharing for history (L9), probabilistic filters in front of exact stores (L10), compression.</li>
-      <li>What you give up: read speed of old versions, exactness (with a fallback), code simplicity.</li>
-    </ul>
-    <p>Ask each group: "Which of your two designs survives a 10× memory cut unchanged?"</p>
-  </aside>
 </section>
-
 <section class="slide">
-  <h2>Round 2 — reads vs writes</h2>
-  <div class="cols small">
-    <div class="card">
-      <h3>Reads dominate (99%)</h3>
-      <p>How much would you precompute?</p>
-    </div>
-    <div class="card">
-      <h3>Writes become frequent (50%+)</h3>
-      <p>Which precomputation now hurts?</p>
-    </div>
-  </div>
-  <div class="box plain small" style="margin-top:14px">Apply to: search index · range analytics · autocomplete ranking · caches</div>
-  <aside class="notes">
-    <p><span class="t">B 00:14</span></p>
-    <h4>Draw out</h4>
-    <ul>
-      <li>Read-heavy: indexes, prefix sums, cached top-k, materialised views — pay on write, collect on read (L5, L6, L4).</li>
-      <li>Write-heavy: prefix sums become O(n) per update (L6, 89 µs/op in the benchmark); in-place index updates amplify (L5); switch to Fenwick/segment trees, buffered/segment-based indexing with a refresh interval, or recompute lazily.</li>
-      <li>The general principle: every index or precomputation is a bet on the read/write ratio.</li>
-    </ul>
-  </aside>
+<h2>Round 1 — memory</h2>
+<div class="cols small">
+<div class="card">
+<h3>Memory is abundant</h3>
+<p>What becomes acceptable that was not?</p>
+</div>
+<div class="card">
+<h3>Memory is tight (10× less)</h3>
+<p>What must change first, and what do you give up?</p>
+</div>
+</div>
+<div class="box plain small" style="margin-top:14px">Apply to: dedup of event IDs · autocomplete · config history · cache capacity</div>
+
 </section>
-
 <section class="slide">
-  <h2>Round 3 — mutability and history</h2>
-  <div class="cols small">
-    <div class="card">
-      <h3>Data becomes immutable</h3>
-      <p>What gets simpler? What can you precompute now?</p>
-    </div>
-    <div class="card">
-      <h3>Every historical version must stay accessible</h3>
-      <p>What does that cost, and who deletes anything?</p>
-    </div>
-  </div>
-  <div class="box plain small" style="margin-top:14px">Apply to: analytics history · configuration · search segments · workflow state</div>
-  <aside class="notes">
-    <p><span class="t">B 00:22</span></p>
-    <h4>Draw out</h4>
-    <ul>
-      <li>Immutable: prefix sums / sparse tables (O(1) queries), sorted arrays, compressed static structures (FSTs), lock-free readers with atomic pointer swap (L6, L4, L9, L11).</li>
-      <li>History required: structural sharing or deltas + checkpoints; reclamation and compaction become first-class operations; retention is a product and legal decision; snapshot tests must check old versions after new commits (L9).</li>
-      <li>Split by mutability (L6's hybrid, L5's segments): immutable bulk + small mutable part — a pattern that keeps recurring.</li>
-    </ul>
-  </aside>
+<h2>Round 2 — reads vs writes</h2>
+<div class="cols small">
+<div class="card">
+<h3>Reads dominate (99%)</h3>
+<p>How much would you precompute?</p>
+</div>
+<div class="card">
+<h3>Writes become frequent (50%+)</h3>
+<p>Which precomputation now hurts?</p>
+</div>
+</div>
+<div class="box plain small" style="margin-top:14px">Apply to: search index · range analytics · autocomplete ranking · caches</div>
+
 </section>
-
 <section class="slide">
-  <h2>Round 4 — exactness, concurrency, skew, consistency</h2>
-  <table class="small">
-    <tr><th>If…</th><th>Then ask…</th></tr>
-    <tr><td>Exact answers are no longer required</td><td>Which error is harmless? What does one error cost? Can an exact store stay behind it?</td></tr>
-    <tr><td>Concurrency rises to 32 workers</td><td>What is shared? Which compound operations must be atomic? Where is the hot cache line?</td></tr>
-    <tr><td>Key popularity becomes skewed</td><td>Which policy or sharding assumption breaks? (LRU vs LFU, hot shard)</td></tr>
-    <tr><td>Update consistency becomes strict</td><td>Which asynchronous or eventually consistent parts must become synchronous — at what latency cost?</td></tr>
-  </table>
-  <aside class="notes">
-    <p><span class="t">B 00:30</span></p>
-    <h4>Draw out, one per row</h4>
-    <ul>
-      <li>Approximate: Bloom filters before databases, Count-Min for heavy hitters; never for irreversible or security decisions (L10).</li>
-      <li>Concurrency: global lock degrades, sharding scales only for uniform keys, atomic APIs, immutability for readers, false sharing (L11).</li>
-      <li>Skew: LFU vs LRU vs scan-resistant policies (L3), hot-key sharding failure (L11), Zipf in benchmarks (L12).</li>
-      <li>Strict consistency: search indexes refreshed synchronously (slow writes), workflow journals written before acting, snapshot commit validation (L5, L8, L9).</li>
-    </ul>
-    <p>Ask groups to revise one of their two initial designs under a row of their choice.</p>
-  </aside>
+<h2>Round 3 — mutability and history</h2>
+<div class="cols small">
+<div class="card">
+<h3>Data becomes immutable</h3>
+<p>What gets simpler? What can you precompute now?</p>
+</div>
+<div class="card">
+<h3>Every historical version must stay accessible</h3>
+<p>What does that cost, and who deletes anything?</p>
+</div>
+</div>
+<div class="box plain small" style="margin-top:14px">Apply to: analytics history · configuration · search segments · workflow state</div>
+
 </section>
-
 <section class="slide">
-  <h2>What stayed constant</h2>
-  <div class="cols">
-    <div class="small">
-      <p>Across every round, the design was <strong>conditional</strong> on:</p>
-      <ul>
-        <li>the <strong>workload</strong></li>
-        <li>the <strong>constraints</strong></li>
-        <li>the <strong>guarantees</strong> required</li>
-        <li>the <strong>acceptable failures and errors</strong></li>
-        <li>the <strong>evidence</strong> available</li>
-      </ul>
-    </div>
-    <div class="box key">
-      <span class="label">The course in one sentence</span>
+<h2>Round 4 — exactness, concurrency, skew, consistency</h2>
+<table class="small">
+<tr><th>If…</th><th>Then ask…</th></tr>
+<tr><td>Exact answers are no longer required</td><td>Which error is harmless? What does one error cost? Can an exact store stay behind it?</td></tr>
+<tr><td>Concurrency rises to 32 workers</td><td>What is shared? Which compound operations must be atomic? Where is the hot cache line?</td></tr>
+<tr><td>Key popularity becomes skewed</td><td>Which policy or sharding assumption breaks? (LRU vs LFU, hot shard)</td></tr>
+<tr><td>Update consistency becomes strict</td><td>Which asynchronous or eventually consistent parts must become synchronous — at what latency cost?</td></tr>
+</table>
+
+</section>
+<section class="slide">
+<h2>What stayed constant</h2>
+<div class="cols">
+<div class="small">
+<p>Across every round, the design was <strong>conditional</strong> on:</p>
+<ul>
+<li>the <strong>workload</strong></li>
+<li>the <strong>constraints</strong></li>
+<li>the <strong>guarantees</strong> required</li>
+<li>the <strong>acceptable failures and errors</strong></li>
+<li>the <strong>evidence</strong> available</li>
+</ul>
+</div>
+<div class="box key">
+<span class="label">The course in one sentence</span>
       There is no universally best data structure — only a decision that is justified for a stated workload, under stated constraints, supported by evidence, with its limits written down.
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">B 00:40</span></p>
-    <p>Ask: "Name one design this semester that was best in one experiment and worst in another." Expected: FlatMap (random vs strided keys, L2), LFU (Zipf vs shifting, L3), trie with cached top-k (fastest queries, most memory, L4), segment tree (dynamic vs static, L6), path copying (tiny vs bulk changes, L9), sharding (uniform vs hot key, L11).</p>
-  </aside>
-</section>
+</div>
 
+</section>
 <section class="slide">
-  <h2>A reusable decision framework</h2>
-  <div class="cols c3 xsmall">
-    <ol>
-      <li>Define the real problem</li>
-      <li>Quantify the workload</li>
-      <li>Identify operations</li>
-      <li>Identify constraints</li>
-      <li>State guarantees</li>
-      <li>Define acceptable failures/errors</li>
-      <li>Generate candidate designs</li>
-    </ol>
-    <ol start="8">
-      <li>Define API and contracts</li>
-      <li>Define invariants</li>
-      <li>Implement the simplest credible baseline</li>
-      <li>Test correctness</li>
-      <li>Form hypotheses</li>
-      <li>Design fair experiments</li>
-    </ol>
-    <ol start="14">
-      <li>Measure</li>
-      <li>Profile if needed</li>
-      <li>Interpret evidence</li>
-      <li>State limitations</li>
-      <li>Choose</li>
-      <li>Revisit when assumptions change</li>
-    </ol>
-  </div>
-  <aside class="notes">
-    <p><span class="t">B 00:48</span></p>
-    <p>Say: "This is what SE618 was about. The structures were examples. The framework is what you keep. Step 10 — the simplest credible baseline — is the step most engineers skip, and it is the one that made most of our experiments meaningful."</p>
-    <p>The same list is in <code>Final_Review_Framework.md</code> for students.</p>
-  </aside>
+<h2>A reusable decision framework</h2>
+<div class="cols c3 xsmall">
+<ol>
+<li>Define the real problem</li>
+<li>Quantify the workload</li>
+<li>Identify operations</li>
+<li>Identify constraints</li>
+<li>State guarantees</li>
+<li>Define acceptable failures/errors</li>
+<li>Generate candidate designs</li>
+</ol>
+<ol start="8">
+<li>Define API and contracts</li>
+<li>Define invariants</li>
+<li>Implement the simplest credible baseline</li>
+<li>Test correctness</li>
+<li>Form hypotheses</li>
+<li>Design fair experiments</li>
+</ol>
+<ol start="14">
+<li>Measure</li>
+<li>Profile if needed</li>
+<li>Interpret evidence</li>
+<li>State limitations</li>
+<li>Choose</li>
+<li>Revisit when assumptions change</li>
+</ol>
+</div>
+
 </section>
 
-<!-- ====================== MODULE C ====================== -->
 <section class="slide divider">
-  <span class="kicker">Module C · 45–60 min</span>
-  <h1>Final exam preparation</h1>
+<span class="kicker">Module C · 45–60 min</span>
+<h1>Final exam preparation</h1>
 </section>
-
 <section class="slide">
-  <h2>The final examination — 60 marks</h2>
-  <table class="small">
-    <tr><th>Section</th><th>Format</th><th class="num">Marks</th><th>What it rewards</th></tr>
-    <tr><td>A — Scenario-based objective questions</td><td>12 × 1</td><td class="num">12</td><td>Interpretation and judgment on short scenarios, code, tables</td></tr>
-    <tr><td>B — Analytical engineering questions</td><td>4 × 6</td><td class="num">24</td><td>Structured reasoning on one theme per question</td></tr>
-    <tr><td>C — Engineering case studies</td><td>2 × 12</td><td class="num">24</td><td>Analysing a realistic system end to end</td></tr>
-  </table>
-  <p class="small" style="margin-top:12px">Reasoning, not recall: you will not be asked to reproduce definitions or proofs.</p>
-  <aside class="notes">
-    <p><span class="t">C 00:00</span></p>
-    <p>Only the structure is announced. Do not preview actual questions. The practice cases are deliberately about course scenarios, not about the exam paper.</p>
-    <p>Final exam: 2 hours; closed book; no notes permitted. Date and room follow the faculty's announcement.</p>
-  </aside>
+<h2>The final examination — 60 marks</h2>
+<table class="small">
+<tr><th>Section</th><th>Format</th><th class="num">Marks</th><th>What it rewards</th></tr>
+<tr><td>A — Scenario-based objective questions</td><td>12 × 1</td><td class="num">12</td><td>Interpretation and judgment on short scenarios, code, tables</td></tr>
+<tr><td>B — Analytical engineering questions</td><td>4 × 6</td><td class="num">24</td><td>Structured reasoning on one theme per question</td></tr>
+<tr><td>C — Engineering case studies</td><td>2 × 12</td><td class="num">24</td><td>Analysing a realistic system end to end</td></tr>
+</table>
+<p class="small" style="margin-top:12px">Reasoning, not recall: you will not be asked to reproduce definitions or proofs.</p>
+
 </section>
-
 <section class="slide">
-  <h2>Skills you should be able to show</h2>
-  <div class="cols small">
-    <ul>
-      <li>Workload analysis; spotting missing requirements</li>
-      <li>Choosing between alternatives — and when the other wins</li>
-      <li>API contracts and invariants</li>
-      <li>Failure analysis</li>
-      <li>Test design</li>
-      <li>Benchmark interpretation and experimental critique</li>
-    </ul>
-    <ul>
-      <li>Scalability reasoning</li>
-      <li>Memory trade-offs</li>
-      <li>Concurrency reasoning</li>
-      <li>Probabilistic-error reasoning</li>
-      <li>Limitation analysis</li>
-    </ul>
-  </div>
-  <aside class="notes"><p><span class="t">C 00:04</span> Tell students that each skill maps to at least two lectures' exercises; the exercises are the best revision material.</p></aside>
+<h2>Skills you should be able to show</h2>
+<div class="cols small">
+<ul>
+<li>Workload analysis; spotting missing requirements</li>
+<li>Choosing between alternatives — and when the other wins</li>
+<li>API contracts and invariants</li>
+<li>Failure analysis</li>
+<li>Test design</li>
+<li>Benchmark interpretation and experimental critique</li>
+</ul>
+<ul>
+<li>Scalability reasoning</li>
+<li>Memory trade-offs</li>
+<li>Concurrency reasoning</li>
+<li>Probabilistic-error reasoning</li>
+<li>Limitation analysis</li>
+</ul>
+</div>
+
 </section>
-
 <section class="slide">
-  <h2>How to write a strong answer</h2>
-  <div class="flow" style="margin-bottom:16px"><span>assumptions</span><span>design choice</span><span>why</span><span>alternative</span><span>trade-off</span><span>evidence needed</span><span class="hl">limitation</span></div>
-  <div class="box good small">"Given 95% reads, infrequent updates and sufficient memory, I would choose <em>X</em> because … If the workload changed to frequent updates, <em>Y</em> would become more attractive because … I would validate this by measuring … under … This conclusion assumes …"</div>
-  <div class="box bad small">"Use a segment tree because it is O(log n)." · "Bloom filters are unreliable." · "B is faster." — no workload, no condition, no evidence.</div>
-  <aside class="notes">
-    <p><span class="t">C 00:08</span></p>
-    <p>Say: "An answer that names the right structure without conditions earns little. An answer that names a reasonable structure, states its assumptions, and says when it would change earns most of the marks — even if the examiner had another structure in mind."</p>
-    <p>Missing information in a scenario is often intentional: state the assumption and continue.</p>
-  </aside>
+<h2>How to write a strong answer</h2>
+<div class="flow" style="margin-bottom:16px"><span>assumptions</span><span>design choice</span><span>why</span><span>alternative</span><span>trade-off</span><span>evidence needed</span><span class="hl">limitation</span></div>
+<div class="box good small">"Given 95% reads, infrequent updates and sufficient memory, I would choose <em>X</em> because … If the workload changed to frequent updates, <em>Y</em> would become more attractive because … I would validate this by measuring … under … This conclusion assumes …"</div>
+<div class="box bad small">"Use a segment tree because it is O(log n)." · "Bloom filters are unreliable." · "B is faster." — no workload, no condition, no evidence.</div>
+
 </section>
-
 <section class="slide">
-  <h2>Practice 1 — a Bloom filter at 3× capacity</h2>
-  <div class="cols wide-l small">
-    <div>
-      <p>A Bloom filter in front of a database was planned for <strong>10 million</strong> keys at <strong>1%</strong> false positives. It now holds <strong>30 million</strong> keys.</p>
-      <ol>
-        <li>Estimate what happened to the false-positive rate. Why is the change not linear?</li>
-        <li>What does the database experience?</li>
-        <li>What should have been monitored? What are your options now?</li>
-      </ol>
-    </div>
-    <div class="box q"><span class="label">Individually · 6 min, in writing</span>Use the answer pattern. Then compare with a neighbour.</div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">C 00:14</span></p>
-    <p>Let students write before discussing. Key points (full reasoning in <code>Instructor_Only/Lecture_14/Practice_Case_Model_Reasoning.md</code>, P3): first, the exact new rate cannot be determined from the target rate and planned n alone unless the deployed m and k are known — reward students who say so. Assuming a near-optimal design for 10M at 1%: k = 7, m ≈ 96 Mbit; at 30M, fill ≈ 0.89 → p ≈ 0.89⁷ ≈ 44%; the database sees ~44× more wasted lookups; monitor fill ratio and observed false positives; rebuild larger, scalable/partitioned filters.</p>
-    <p>Reward: an estimate with the mechanism (fill^k), a system consequence in units the operator understands, and a monitoring proposal. A vague "it gets worse" is weak.</p>
-  </aside>
+<h2>Practice 1 — a Bloom filter at 3× capacity</h2>
+<div class="cols wide-l small">
+<div>
+<p>A Bloom filter in front of a database was planned for <strong>10 million</strong> keys at <strong>1%</strong> false positives. It now holds <strong>30 million</strong> keys.</p>
+<ol>
+<li>Estimate what happened to the false-positive rate. Why is the change not linear?</li>
+<li>What does the database experience?</li>
+<li>What should have been monitored? What are your options now?</li>
+</ol>
+</div>
+<div class="box q"><span class="label">Individually · 6 min, in writing</span>Use the answer pattern. Then compare with a neighbour.</div>
+</div>
+
 </section>
-
 <section class="slide">
-  <h2>Practice 2 — success, crash, retry</h2>
-  <div class="cols wide-l small">
-    <div>
-      <p>A workflow task sends an invoice through an external API. The call succeeded, but the engine crashed before recording success. After recovery, the task ran again.</p>
-      <ol>
-        <li>What went wrong? Which states and events were involved?</li>
-        <li>Propose two ways to prevent a duplicate invoice, and their costs.</li>
-        <li>Which tests would have caught this before production?</li>
-      </ol>
-    </div>
-    <div class="box q"><span class="label">Pairs · 8 min</span>Write the state sequence first.</div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">C 00:24</span></p>
-    <p>Key points (P7 in the model-reasoning file): journal had Started but not Succeeded; recovery treated the task as idempotent (at-least-once). Fixes: idempotency key per workflow run + task (not per attempt); mark non-idempotent tasks and reconcile instead of re-running; outbox. Tests: crash injection between side effect and journal write; duplicate completion; replay.</p>
-    <p>Reward answers that name the <em>assumption</em> that failed (idempotency), not just the bug.</p>
-  </aside>
+<h2>Practice 2 — success, crash, retry</h2>
+<div class="cols wide-l small">
+<div>
+<p>A workflow task sends an invoice through an external API. The call succeeded, but the engine crashed before recording success. After recovery, the task ran again.</p>
+<ol>
+<li>What went wrong? Which states and events were involved?</li>
+<li>Propose two ways to prevent a duplicate invoice, and their costs.</li>
+<li>Which tests would have caught this before production?</li>
+</ol>
+</div>
+<div class="box q"><span class="label">Pairs · 8 min</span>Write the state sequence first.</div>
+</div>
+
 </section>
-
 <section class="slide">
-  <h2>Practice 3 — a "5× faster" claim</h2>
-  <div class="cols wide-l small">
-    <div>
-      <p>A pull request claims "the new parser is <strong>5× faster</strong>", based on one run on the developer's laptop, compared with numbers recorded last month.</p>
-      <ol>
-        <li>What can be concluded?</li>
-        <li>List the threats to validity.</li>
-        <li>Design the experiment you would accept as evidence.</li>
-      </ol>
-    </div>
-    <div class="box q"><span class="label">Groups · 8 min</span>Separate RESULT, INTERPRETATION and GENERALISATION.</div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">C 00:34</span></p>
-    <p>Key points (P5): nothing about the parser; confounders (dates, machine state, inputs, flags), one sample, no spread, no correctness check. Accepted experiment: same machine/flags/inputs, warm-up, interleaved repetitions, median + interval + p99, memory, identical-output check, raw data and environment; plus what it still would not show. Remind: an interval does not remove systematic bias.</p>
-  </aside>
+<h2>Practice 3 — a "5× faster" claim</h2>
+<div class="cols wide-l small">
+<div>
+<p>A pull request claims "the new parser is <strong>5× faster</strong>", based on one run on the developer's laptop, compared with numbers recorded last month.</p>
+<ol>
+<li>What can be concluded?</li>
+<li>List the threats to validity.</li>
+<li>Design the experiment you would accept as evidence.</li>
+</ol>
+</div>
+<div class="box q"><span class="label">Groups · 8 min</span>Separate RESULT, INTERPRETATION and GENERALISATION.</div>
+</div>
+
 </section>
-
 <section class="slide">
-  <h2>More practice (in <code>Practice_Cases.md</code>)</h2>
-  <table class="small">
-    <tr><td>P1</td><td>A cache's workload shifts from temporal locality to a stable frequent set plus nightly scans</td></tr>
-    <tr><td>P2</td><td>A search index answers fast but updates became ~50× slower</td></tr>
-    <tr><td>P4</td><td>A global-lock service slows down at 16 threads</td></tr>
-    <tr><td>P6</td><td>Thousands of snapshots, each with a tiny edit</td></tr>
-    <tr><td>P8</td><td>Range queries over data that is no longer immutable</td></tr>
-  </table>
-  <div class="box key small" style="margin-top:12px">Write your answer <strong>before</strong> looking anything up. Then check: did you state assumptions, an alternative, the evidence needed and a limitation?</div>
-  <aside class="notes">
-    <p><span class="t">C 00:44</span></p>
-    <p>If time remains, run one of these as a group exercise (P4 or P8 work well). Model reasoning for all eight cases: <code>Instructor_Only/Lecture_14/Practice_Case_Model_Reasoning.md</code>. Do not post it before students have attempted the cases; consider discussing it in office hours instead.</p>
-  </aside>
+<h2>More practice (in <code>Practice_Cases.md</code>)</h2>
+<table class="small">
+<tr><td>P1</td><td>A cache's workload shifts from temporal locality to a stable frequent set plus nightly scans</td></tr>
+<tr><td>P2</td><td>A search index answers fast but updates became ~50× slower</td></tr>
+<tr><td>P4</td><td>A global-lock service slows down at 16 threads</td></tr>
+<tr><td>P6</td><td>Thousands of snapshots, each with a tiny edit</td></tr>
+<tr><td>P8</td><td>Range queries over data that is no longer immutable</td></tr>
+</table>
+<div class="box key small" style="margin-top:12px">Write your answer <strong>before</strong> looking anything up. Then check: did you state assumptions, an alternative, the evidence needed and a limitation?</div>
+
 </section>
-
 <section class="slide">
-  <h2>Closing</h2>
-  <div class="cols small">
-    <div>
-      <ul>
-        <li>Coursework marks (/40) will be published after all defenses are graded</li>
-        <li>Final examination (/60): date and logistics from the faculty</li>
-        <li>Review: <code>Final_Review_Framework.md</code>, <code>Practice_Cases.md</code>, each lecture's exercises and "what it does not show" slides</li>
-      </ul>
-    </div>
-    <div class="box key">
-      <span class="label">Take away</span>
+<h2>Closing</h2>
+<div class="cols small">
+<div>
+<ul>
+<li>Coursework marks (/40) will be published after all defenses are graded</li>
+<li>Final examination (/60): date and logistics from the faculty</li>
+<li>Review: <code>Final_Review_Framework.md</code>, <code>Practice_Cases.md</code>, each lecture's exercises and "what it does not show" slides</li>
+</ul>
+</div>
+<div class="box key">
+<span class="label">Take away</span>
       Workload first. Contract before code. A baseline you trust. Evidence with its limits. A decision you would change when the assumptions change.
     </div>
-  </div>
-  <aside class="notes">
-    <p>After the session: complete <code>Instructor_Only/Lecture_14/Project_Closure_Checklist.md</code>. Letter-grade thresholds remain disabled unless verified.</p>
-  </aside>
-</section>
+</div>
 
+</section>
 <script src="../common/slides.js"></script>
 </body>
 </html>

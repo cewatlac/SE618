@@ -1,555 +1,391 @@
+<!doctype html>
 <!DOCTYPE html>
+
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1" name="viewport"/>
 <title>SE618 L10 — Probabilistic Data Structures</title>
-<link rel="stylesheet" href="../common/styles.css">
-<link rel="stylesheet" href="../common/print.css">
-</head>
-<body data-course="SE618" data-lecture="Lecture 10 · Sat 28 Nov 2026">
-
+<link href="../common/styles.css" rel="stylesheet"/>
+<link href="../common/print.css" rel="stylesheet"/>
+<meta content="SE618 Lecture 10: Probabilistic Data Structures. Student-facing interactive slides." name="description"/></head>
+<body data-course="SE618" data-lecture="Lecture 10 · Sat 28 Nov 2026" data-public="true">
 <section class="slide title">
-  <span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
-  <h1>Lecture 10<br>Probabilistic Data Structures</h1>
-  <p>Not "is a Bloom filter correct?" but "which error is allowed, how often, and what does it cost?"</p>
-  <div class="meta">Saturday 28 November 2026 · 3 hours<br>Testing + benchmarking checkpoint due Sat 5 Dec</div>
-  <aside class="notes">
-    <h4>Plan (3h)</h4>
-    <table><tr><td>00:00–00:20</td><td>Part 1 — Scenario: a crawler that cannot remember every URL</td></tr>
-    <tr><td>00:20–01:00</td><td>Part 2 — Bloom filters: mechanism, one-sided error, parameters, capacity planning, overfill</td></tr>
-    <tr><td>01:00–01:30</td><td>Part 3 — Engineering: error cost, placement before an exact store, dangers, deletion, saturation, merging; Count-Min Sketch; HyperLogLog (brief)</td></tr>
-    <tr><td>01:30–01:40</td><td>Break</td></tr>
-    <tr><td>01:40–02:20</td><td>Part 4 — Lab: implement, plan n/m/k/p, measure across seeds, overfill</td></tr>
-    <tr><td>02:20–02:45</td><td>Part 5 — Interpreting error rates: variance, samples, "is 1% acceptable?"</td></tr>
-    <tr><td>02:45–03:00</td><td>Part 6 — Project: the claim your benchmark will test (checkpoint 5 Dec)</td></tr></table>
-    <h4>Prepare</h4>
-    <p><code>Student_Resources/</code>: <code>bloom.hpp</code> (TODO add/might_contain; Count-Min Sketch complete), <code>bloom_test.cpp</code>, <code>bloom_lab.cpp</code> (&lt;1 s), <code>cms_demo.cpp</code> (&lt;1 s), <code>EXERCISE.md</code>. Instructor: <code>Instructor_Only/Lecture_10/bloom_solution.hpp</code>, <code>expected_results.md</code>.</p>
-  </aside>
-</section>
+<span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
+<h1>Lecture 10<br/>Probabilistic Data Structures</h1>
+<p>Not "is a Bloom filter correct?" but "which error is allowed, how often, and what does it cost?"</p>
+<div class="meta">Saturday 28 November 2026 · 3 hours<br/>Testing + benchmarking checkpoint due Sat 5 Dec</div>
 
+</section>
 <section class="slide">
-  <h2>Where we are</h2>
-  <div class="cols">
-    <div class="small">
-      <ul>
-        <li>So far every structure was <strong>exact</strong>: its answers were right, and we traded time, memory and complexity</li>
-        <li>Today we add a fourth currency: <strong>certainty</strong></li>
-        <li>Lecture 1 already hinted at it: a dedup filter with a 0.1% error at 30× less memory</li>
-      </ul>
-    </div>
-    <div class="box key">
-      <span class="label">Today's distinctive lesson</span>
+<h2>Where we are</h2>
+<div class="cols">
+<div class="small">
+<ul>
+<li>So far every structure was <strong>exact</strong>: its answers were right, and we traded time, memory and complexity</li>
+<li>Today we add a fourth currency: <strong>certainty</strong></li>
+<li>Lecture 1 already hinted at it: a dedup filter with a 0.1% error at 30× less memory</li>
+</ul>
+</div>
+<div class="box key">
+<span class="label">Today's distinctive lesson</span>
       Real systems deliberately trade certainty for large savings in memory, bandwidth or computation. The engineering is in bounding the error, placing it where its cost is acceptable, and monitoring it in production.
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:00</span></p>
-    <h4>Ask</h4>
-    <p>"Where have you already accepted approximate answers?" Expected: page-view counters ("1.2M views"), 'people also bought', unique-visitor counts in analytics, spell checkers. "None of them is 'wrong'; each has an error budget someone chose — often without writing it down."</p>
-  </aside>
+</div>
+
 </section>
 
-<!-- ====================== PART 1 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 1 · 00:00–00:20</span>
-  <h1>Scenario: a crawler that<br>cannot remember everything</h1>
+<span class="kicker">Part 1 · 00:00–00:20</span>
+<h1>Scenario: a crawler that<br/>cannot remember everything</h1>
 </section>
-
 <section class="slide">
-  <h2>The scenario</h2>
-  <div class="cols wide-l small">
-    <div>
-      <p>A web crawler fetches pages and extracts links. Before fetching, it must skip URLs it has already fetched.</p>
-      <ul>
-        <li><strong>1 billion</strong> URLs seen so far; ~80 bytes each</li>
-        <li>Frontier workers check <strong>200,000 URLs/s</strong></li>
-        <li>An exact set on disk: ~0.1–1 ms per lookup (too slow)</li>
-        <li>An exact in-memory set: ~100+ GB (too big per worker)</li>
-        <li>Fetching a URL twice wastes bandwidth; skipping a new URL loses a page</li>
-      </ul>
-    </div>
-    <div class="box q"><span class="label">Pairs · 3 min</span>
+<h2>The scenario</h2>
+<div class="cols wide-l small">
+<div>
+<p>A web crawler fetches pages and extracts links. Before fetching, it must skip URLs it has already fetched.</p>
+<ul>
+<li><strong>1 billion</strong> URLs seen so far; ~80 bytes each</li>
+<li>Frontier workers check <strong>200,000 URLs/s</strong></li>
+<li>An exact set on disk: ~0.1–1 ms per lookup (too slow)</li>
+<li>An exact in-memory set: ~100+ GB (too big per worker)</li>
+<li>Fetching a URL twice wastes bandwidth; skipping a new URL loses a page</li>
+</ul>
+</div>
+<div class="box q"><span class="label">Pairs · 3 min</span>
       Which is worse for this product: re-fetching a known URL, or never fetching a new one? What about for a payment-deduplication service?</div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:03</span></p>
-    <h4>Expected answers</h4>
-    <ul>
-      <li>Crawler: a duplicate fetch costs a little bandwidth; a skipped new page is lost coverage — usually worse, but a small loss (0.1–1%) may be acceptable if pages are re-discovered later via other links.</li>
-      <li>Payments (Lecture 1): skipping a genuine payment is unacceptable; a duplicate is also unacceptable. Neither error is free — the probabilistic structure can only be a fast pre-filter in front of an exact check.</li>
-    </ul>
-    <h4>Arithmetic</h4>
-    <p>10⁹ × 80 B = 80 GB of strings alone; with hash-set overhead &gt; 150 GB. A Bloom filter at 1% FP needs ~9.6 bits per element: 1.2 GB. At 0.1%: ~1.8 GB. Two orders of magnitude.</p>
-    <h4>Teaching point</h4>
-    <p>"The same structure is acceptable in one product and dangerous in another. The data structure has no opinion; the product does."</p>
-  </aside>
+</div>
+
 </section>
 
-<!-- ====================== PART 2 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 2 · 00:20–01:00</span>
-  <h1>Bloom filters: mechanism<br>and parameters</h1>
+<span class="kicker">Part 2 · 00:20–01:00</span>
+<h1>Bloom filters: mechanism<br/>and parameters</h1>
 </section>
-
 <section class="slide">
-  <h2>Mechanism</h2>
-  <svg viewBox="0 0 1150 250" aria-label="Bloom filter bit array">
-    <g font-family="Consolas,monospace" font-size="15">
-      <g stroke="#14304a" stroke-width="1.5">
-        <rect x="40" y="110" width="50" height="46" fill="#fff"/><rect x="90" y="110" width="50" height="46" fill="#0b6e75"/><rect x="140" y="110" width="50" height="46" fill="#fff"/><rect x="190" y="110" width="50" height="46" fill="#fff"/>
-        <rect x="240" y="110" width="50" height="46" fill="#0b6e75"/><rect x="290" y="110" width="50" height="46" fill="#fff"/><rect x="340" y="110" width="50" height="46" fill="#0b6e75"/><rect x="390" y="110" width="50" height="46" fill="#fff"/>
-        <rect x="440" y="110" width="50" height="46" fill="#0b6e75"/><rect x="490" y="110" width="50" height="46" fill="#fff"/><rect x="540" y="110" width="50" height="46" fill="#fff"/><rect x="590" y="110" width="50" height="46" fill="#0b6e75"/>
-        <rect x="640" y="110" width="50" height="46" fill="#fff"/><rect x="690" y="110" width="50" height="46" fill="#fff"/><rect x="740" y="110" width="50" height="46" fill="#0b6e75"/><rect x="790" y="110" width="50" height="46" fill="#fff"/>
-      </g>
-      <text x="40" y="180" fill="#46505e" font-family="Segoe UI">m bits, initially 0</text>
-      <text x="90" y="40" fill="#0b6e75">add("a.com/x"): h1,h2,h3 → 1, 4, 8</text>
-      <g stroke="#0b6e75" stroke-width="2" fill="none"><path d="M115,50 L115,106"/><path d="M265,50 L265,106"/><path d="M465,50 L465,106"/></g>
-      <text x="340" y="220" fill="#a3262a">query("b.org/y") → 6, 11, 14: all set → "maybe" (false positive)</text>
-      <g stroke="#a3262a" stroke-width="2" fill="none" stroke-dasharray="5 4"><path d="M365,200 L365,160"/><path d="M615,200 L615,160"/><path d="M765,200 L765,160"/></g>
-      <text x="880" y="126" fill="#46505e" font-family="Segoe UI">query("c.net") → 2, 4, 9:</text>
-      <text x="880" y="150" fill="#1f6b33" font-family="Segoe UI">bit 2 is 0 → "definitely not"</text>
-    </g>
-  </svg>
-  <div class="cols small">
-    <ul><li><strong>add</strong>: set k bits chosen by k hash functions</li><li><strong>query</strong>: all k bits set → "maybe"; any bit 0 → "definitely not"</li></ul>
-    <ul><li>No false negatives (if nothing clears bits)</li><li>False positives: other keys set those bits</li></ul>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:20</span></p>
-    <h4>Say</h4>
-    <p>"Everyone has seen this diagram. The interesting sentence is the asterisk on 'no false negatives': it holds only while nothing clears bits, the hash functions are the same at insert and query time, and the filter was not lost or corrupted. Those are operational conditions, not mathematical ones."</p>
-    <h4>k hash functions in practice</h4>
-    <p>Computing k independent hashes is expensive. Standard trick (Kirsch–Mitzenmacher): g_i = h1 + i·h2 from two hashes. Double hashing is a standard practical technique that can provide essentially the expected Bloom-filter behaviour under suitable hash assumptions — validate the actual implementation empirically, as the lab does (observed 0.99–1.01% vs 1.00% predicted). The hash quality lessons of Lecture 2 apply: a weak hash on structured keys (sequential IDs) clusters bits and raises the FP rate above the formula.</p>
-  </aside>
+<h2>Mechanism</h2>
+<svg aria-label="Bloom filter bit array" viewbox="0 0 1150 250">
+<g font-family="Consolas,monospace" font-size="15">
+<g stroke="#14304a" stroke-width="1.5">
+<rect fill="#fff" height="46" width="50" x="40" y="110"></rect><rect fill="#0b6e75" height="46" width="50" x="90" y="110"></rect><rect fill="#fff" height="46" width="50" x="140" y="110"></rect><rect fill="#fff" height="46" width="50" x="190" y="110"></rect>
+<rect fill="#0b6e75" height="46" width="50" x="240" y="110"></rect><rect fill="#fff" height="46" width="50" x="290" y="110"></rect><rect fill="#0b6e75" height="46" width="50" x="340" y="110"></rect><rect fill="#fff" height="46" width="50" x="390" y="110"></rect>
+<rect fill="#0b6e75" height="46" width="50" x="440" y="110"></rect><rect fill="#fff" height="46" width="50" x="490" y="110"></rect><rect fill="#fff" height="46" width="50" x="540" y="110"></rect><rect fill="#0b6e75" height="46" width="50" x="590" y="110"></rect>
+<rect fill="#fff" height="46" width="50" x="640" y="110"></rect><rect fill="#fff" height="46" width="50" x="690" y="110"></rect><rect fill="#0b6e75" height="46" width="50" x="740" y="110"></rect><rect fill="#fff" height="46" width="50" x="790" y="110"></rect>
+</g>
+<text fill="#46505e" font-family="Segoe UI" x="40" y="180">m bits, initially 0</text>
+<text fill="#0b6e75" x="90" y="40">add("a.com/x"): h1,h2,h3 → 1, 4, 8</text>
+<g fill="none" stroke="#0b6e75" stroke-width="2"><path d="M115,50 L115,106"></path><path d="M265,50 L265,106"></path><path d="M465,50 L465,106"></path></g>
+<text fill="#a3262a" x="340" y="220">query("b.org/y") → 6, 11, 14: all set → "maybe" (false positive)</text>
+<g fill="none" stroke="#a3262a" stroke-dasharray="5 4" stroke-width="2"><path d="M365,200 L365,160"></path><path d="M615,200 L615,160"></path><path d="M765,200 L765,160"></path></g>
+<text fill="#46505e" font-family="Segoe UI" x="880" y="126">query("c.net") → 2, 4, 9:</text>
+<text fill="#1f6b33" font-family="Segoe UI" x="880" y="150">bit 2 is 0 → "definitely not"</text>
+</g>
+</svg>
+<div class="cols small">
+<ul><li><strong>add</strong>: set k bits chosen by k hash functions</li><li><strong>query</strong>: all k bits set → "maybe"; any bit 0 → "definitely not"</li></ul>
+<ul><li>No false negatives (if nothing clears bits)</li><li>False positives: other keys set those bits</li></ul>
+</div>
+
 </section>
-
 <section class="slide">
-  <h2>The false-positive rate, interpreted</h2>
-  <div class="cols">
-    <div class="small">
-      <p>After n insertions into m bits with k hashes:</p>
-      <p class="lead">p ≈ (1 − e<sup>−kn/m</sup>)<sup>k</sup></p>
-      <ul>
-        <li>e<sup>−kn/m</sup> ≈ fraction of bits still 0</li>
-        <li>p ≈ (fraction of bits set)<sup>k</sup></li>
-        <li>Best k = (m/n) ln 2 → half the bits set</li>
-        <li>Plan: m = −n ln p / (ln 2)²</li>
-      </ul>
-    </div>
-    <table class="tight small">
-      <tr><th class="num">target p</th><th class="num">bits / element</th><th class="num">k</th></tr>
-      <tr><td class="num">10%</td><td class="num">4.8</td><td class="num">3</td></tr>
-      <tr><td class="num">1%</td><td class="num">9.6</td><td class="num">7</td></tr>
-      <tr><td class="num">0.1%</td><td class="num">14.4</td><td class="num">10</td></tr>
-      <tr><td class="num">0.01%</td><td class="num">19.2</td><td class="num">13</td></tr>
-    </table>
-  </div>
-  <div class="box key small">Each 10× reduction in p costs ~4.8 more bits per element — independent of how big the keys are.</div>
-  <aside class="notes">
-    <p><span class="t">00:28</span></p>
-    <h4>Teach interpretation, not memorisation</h4>
-    <ul>
-      <li>"p is the probability that k random bits are all set." If half the bits are set and k = 7: 0.5⁷ ≈ 0.8%. That one sentence explains the formula.</li>
-      <li>Size independence: an 80-byte URL and an 8-byte ID cost the same 9.6 bits at 1%. That is why the savings are so dramatic for large keys.</li>
-      <li>The optimum leaves the filter half full; the fill ratio is therefore the natural health metric.</li>
-    </ul>
-    <h4>Ask</h4>
-    <p>"You need p = 0.1% instead of 1% for the crawler. How much more memory?" Answer: 14.4/9.6 = 1.5× (1.2 GB → 1.8 GB). "Is that worth it?" — depends on what a false positive costs. That is today's question in miniature.</p>
-  </aside>
+<h2>The false-positive rate, interpreted</h2>
+<div class="cols">
+<div class="small">
+<p>After n insertions into m bits with k hashes:</p>
+<p class="lead">p ≈ (1 − e<sup>−kn/m</sup>)<sup>k</sup></p>
+<ul>
+<li>e<sup>−kn/m</sup> ≈ fraction of bits still 0</li>
+<li>p ≈ (fraction of bits set)<sup>k</sup></li>
+<li>Best k = (m/n) ln 2 → half the bits set</li>
+<li>Plan: m = −n ln p / (ln 2)²</li>
+</ul>
+</div>
+<table class="tight small">
+<tr><th class="num">target p</th><th class="num">bits / element</th><th class="num">k</th></tr>
+<tr><td class="num">10%</td><td class="num">4.8</td><td class="num">3</td></tr>
+<tr><td class="num">1%</td><td class="num">9.6</td><td class="num">7</td></tr>
+<tr><td class="num">0.1%</td><td class="num">14.4</td><td class="num">10</td></tr>
+<tr><td class="num">0.01%</td><td class="num">19.2</td><td class="num">13</td></tr>
+</table>
+</div>
+<div class="box key small">Each 10× reduction in p costs ~4.8 more bits per element — independent of how big the keys are.</div>
+
 </section>
-
 <section class="slide">
-  <h2>Capacity planning: what if n is wrong?</h2>
-  <div class="cols wide-r">
-    <div class="small">
-      <p>Planned for n = 100,000 at p = 1% (m = 958,506 bits, k = 7). Then more URLs arrive than planned:</p>
-      <ul>
-        <li>The filter does not fail; it silently becomes <strong>less useful</strong></li>
-        <li>2× the plan → ~16× the FP rate</li>
-        <li>The fill ratio tells you the current p without knowing n</li>
-      </ul>
-    </div>
-    <table class="tight small">
-      <tr><th class="num">inserted / planned</th><th class="num">fill</th><th class="num">FP rate</th></tr>
-      <tr><td class="num">0.5×</td><td class="num">0.31</td><td class="num">0.02%</td></tr>
-      <tr class="hl"><td class="num">1×</td><td class="num">0.52</td><td class="num">1.0%</td></tr>
-      <tr><td class="num">2×</td><td class="num">0.77</td><td class="num">15.8%</td></tr>
-      <tr><td class="num">4×</td><td class="num">0.95</td><td class="num">67.9%</td></tr>
-      <tr><td class="num">10×</td><td class="num">1.00</td><td class="num">99.6%</td></tr>
-    </table>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:36</span></p>
-    <h4>Numbers</h4>
-    <p>Measured in the lab (observed FP over 200,000 probes; they match the formula to within 0.1 percentage points). Students will reproduce them after the break; showing the table now is fine — the lab's value is in their own planning and interpretation.</p>
-    <h4>Teaching points</h4>
-    <ul>
-      <li>Degradation is non-linear: the exponent k amplifies the fill.</li>
-      <li>A filter at 10× capacity says "maybe" to almost everything — for the crawler, that means "skip almost every new page", silently. Silent degradation again (L3's buggy LRU, L5's stale statistics).</li>
-      <li>Monitoring: export the fill ratio and alert at, say, 0.6 (≈ 3% FP). Estimating n itself is possible from the fill ratio: n ≈ −(m/k) ln(1 − fill).</li>
-    </ul>
-    <h4>Mitigations</h4>
-    <p>Over-provision; rebuild bigger from the source of truth; scalable Bloom filters (add a new, larger filter when one fills up, query all); time-partitioned filters (one per day, drop old ones) — which also gives a form of deletion.</p>
-  </aside>
+<h2>Capacity planning: what if n is wrong?</h2>
+<div class="cols wide-r">
+<div class="small">
+<p>Planned for n = 100,000 at p = 1% (m = 958,506 bits, k = 7). Then more URLs arrive than planned:</p>
+<ul>
+<li>The filter does not fail; it silently becomes <strong>less useful</strong></li>
+<li>2× the plan → ~16× the FP rate</li>
+<li>The fill ratio tells you the current p without knowing n</li>
+</ul>
+</div>
+<table class="tight small">
+<tr><th class="num">inserted / planned</th><th class="num">fill</th><th class="num">FP rate</th></tr>
+<tr><td class="num">0.5×</td><td class="num">0.31</td><td class="num">0.02%</td></tr>
+<tr class="hl"><td class="num">1×</td><td class="num">0.52</td><td class="num">1.0%</td></tr>
+<tr><td class="num">2×</td><td class="num">0.77</td><td class="num">15.8%</td></tr>
+<tr><td class="num">4×</td><td class="num">0.95</td><td class="num">67.9%</td></tr>
+<tr><td class="num">10×</td><td class="num">1.00</td><td class="num">99.6%</td></tr>
+</table>
+</div>
+
 </section>
-
 <section class="slide">
-  <h2>Choosing k is a trade-off too</h2>
-  <div class="cols">
-    <table class="tight small">
-      <tr><th class="num">k</th><th class="num">predicted p</th><th class="num">observed p</th></tr>
-      <tr><td class="num">1</td><td class="num">9.9%</td><td class="num">9.8%</td></tr>
-      <tr><td class="num">2</td><td class="num">3.5%</td><td class="num">3.5%</td></tr>
-      <tr><td class="num">4</td><td class="num">1.4%</td><td class="num">1.4%</td></tr>
-      <tr class="hl"><td class="num">7</td><td class="num">1.0%</td><td class="num">0.99%</td></tr>
-      <tr><td class="num">12</td><td class="num">1.8%</td><td class="num">1.7%</td></tr>
-      <tr><td class="num">20</td><td class="num">7.1%</td><td class="num">7.1%</td></tr>
-    </table>
-    <div class="small">
-      <p>Same memory (m fixed), n = 100,000.</p>
-      <ul>
-        <li>Too few hashes: each check is weak</li>
-        <li>Too many: the array fills up faster</li>
-        <li>Every hash is a memory access: k = 7 means 7 likely cache misses per query for a large filter</li>
-      </ul>
-      <p class="xsmall muted">Blocked Bloom filters put all k bits of a key in one cache line: slightly higher p, far fewer misses.</p>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:44</span></p>
-    <h4>Say</h4>
-    <p>"Notice the parallel with Lecture 11 next week: the textbook optimum minimises FP rate; a production optimum may accept a slightly higher p to get 1 cache miss per query instead of 7. Blocked Bloom filters (e.g. in RocksDB's newer filter format) make exactly that trade."</p>
-    <h4>Misconception</h4>
-    <p>"More hash functions = more accurate." True only up to the optimum; past it, accuracy gets worse (k = 20: 7% vs 1%).</p>
-  </aside>
+<h2>Choosing k is a trade-off too</h2>
+<div class="cols">
+<table class="tight small">
+<tr><th class="num">k</th><th class="num">predicted p</th><th class="num">observed p</th></tr>
+<tr><td class="num">1</td><td class="num">9.9%</td><td class="num">9.8%</td></tr>
+<tr><td class="num">2</td><td class="num">3.5%</td><td class="num">3.5%</td></tr>
+<tr><td class="num">4</td><td class="num">1.4%</td><td class="num">1.4%</td></tr>
+<tr class="hl"><td class="num">7</td><td class="num">1.0%</td><td class="num">0.99%</td></tr>
+<tr><td class="num">12</td><td class="num">1.8%</td><td class="num">1.7%</td></tr>
+<tr><td class="num">20</td><td class="num">7.1%</td><td class="num">7.1%</td></tr>
+</table>
+<div class="small">
+<p>Same memory (m fixed), n = 100,000.</p>
+<ul>
+<li>Too few hashes: each check is weak</li>
+<li>Too many: the array fills up faster</li>
+<li>Every hash is a memory access: k = 7 means 7 likely cache misses per query for a large filter</li>
+</ul>
+<p class="xsmall muted">Blocked Bloom filters put all k bits of a key in one cache line: slightly higher p, far fewer misses.</p>
+</div>
+</div>
+
 </section>
-
 <section class="slide">
-  <h2>Contract of a Bloom filter</h2>
-  <pre class="sm"><code>void add(uint64_t key);
+<h2>Contract of a Bloom filter</h2>
+<pre class="sm"><code>void add(uint64_t key);
 bool might_contain(uint64_t key) const;   // false: definitely never added
                                           // true: added, or a false positive (~p)
 double fill_ratio() const;                // monitoring: current p ≈ fill^k
 bool merge(const BloomFilter&amp; other);     // union; only if m, k, seed are equal</code></pre>
-  <ul class="small">
-    <li>The name <code>might_contain</code> encodes the semantics; <code>contains</code> would lie</li>
-    <li>Parameters (m, k, hash, seed) are part of the persisted format and of mergeability</li>
-    <li>No <code>remove</code>: clearing a bit may create false negatives for other keys</li>
-  </ul>
-  <aside class="notes">
-    <p><span class="t">00:52</span></p>
-    <h4>API naming</h4>
-    <p>Guava's API is literally <code>mightContain</code>. Names that tell the truth protect callers — Lecture 1's contract lesson.</p>
-    <h4>Merge</h4>
-    <p>Union of two filters with identical parameters = bitwise OR. This makes Bloom filters naturally distributed: each worker builds a filter over its partition, then OR them. Intersection is also possible (AND) but its FP rate is worse than a filter built from the intersection.</p>
-    <h4>Persistence</h4>
-    <p>A filter is just bits: easy to snapshot. But the hash function and seed must be versioned with it; changing the hash library silently turns every stored filter into garbage (every query becomes a random answer — including false negatives). That is an operational failure mode worth a test.</p>
-    <h4>Transition</h4>
-    <p>"When is this structure a good idea, and when is it dangerous?"</p>
-  </aside>
-</section>
+<ul class="small">
+<li>The name <code>might_contain</code> encodes the semantics; <code>contains</code> would lie</li>
+<li>Parameters (m, k, hash, seed) are part of the persisted format and of mergeability</li>
+<li>No <code>remove</code>: clearing a bit may create false negatives for other keys</li>
+</ul>
 
-<!-- ====================== PART 3 ====================== -->
-<section class="slide divider">
-  <span class="kicker">Part 3 · 01:00–01:30</span>
-  <h1>Error budgets, placement, danger</h1>
-</section>
-
-<section class="slide">
-  <h2>Placement: a filter in front of the truth</h2>
-  <svg viewBox="0 0 1150 230" aria-label="Bloom filter before an exact store">
-    <defs><marker id="a10" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#14304a"/></marker></defs>
-    <g font-family="Segoe UI, Arial" font-size="16">
-      <rect x="20" y="80" width="140" height="56" rx="8" fill="#f5f6f8" stroke="#14304a"/><text x="44" y="113">lookup(key)</text>
-      <rect x="240" y="70" width="190" height="76" rx="8" fill="#e3f1f2" stroke="#0b6e75" stroke-width="2"/><text x="258" y="102">Bloom filter</text><text x="258" y="126" font-size="14">in memory, ~1 GB</text>
-      <rect x="560" y="10" width="230" height="60" rx="8" fill="#e8f5ec" stroke="#1f6b33"/><text x="578" y="46">"definitely not" → done</text>
-      <rect x="560" y="140" width="250" height="76" rx="8" fill="#fff4e0" stroke="#9a5b00" stroke-width="2"/><text x="578" y="172">exact store (disk / DB)</text><text x="578" y="196" font-size="14">~1% of new keys + true hits</text>
-      <g stroke="#14304a" stroke-width="2" fill="none"><path d="M160,108 L237,108" marker-end="url(#a10)"/><path d="M430,95 L557,45" marker-end="url(#a10)"/><path d="M430,125 L557,175" marker-end="url(#a10)"/></g>
-      <text x="445" y="58" font-size="14" fill="#1f6b33">no</text><text x="445" y="170" font-size="14" fill="#9a5b00">maybe</text>
-      <text x="850" y="100" font-size="15" fill="#46505e">The filter saves work;</text><text x="850" y="124" font-size="15" fill="#46505e">the exact store keeps</text><text x="850" y="148" font-size="15" fill="#46505e">the answers correct.</text>
-    </g>
-  </svg>
-  <aside class="notes">
-    <p><span class="t">01:00</span></p>
-    <h4>Say</h4>
-    <p>"This is the most common production pattern: the probabilistic structure is not the source of truth, it is a filter that avoids expensive work. LSM storage engines (RocksDB, Cassandra, HBase) keep a Bloom filter per on-disk file so that a lookup skips files that cannot contain the key. With p = 1%, 99% of pointless disk reads disappear, and correctness still comes from the files."</p>
-    <h4>Cost model</h4>
-    <p>Expected cost per lookup of a new key = filter check + p × exact lookup. With a 1 ms disk lookup and p = 1%: ~10 µs on average instead of 1 ms. Now 'is p = 1% acceptable?' has a numeric answer: it sets the load on the exact store.</p>
-  </aside>
-</section>
-
-<section class="slide">
-  <h2>What does an error cost?</h2>
-  <table class="small">
-    <tr><th>System</th><th>False positive causes…</th><th>Acceptable?</th></tr>
-    <tr><td>Crawler "seen URL?"</td><td>A new page is skipped</td><td>Usually, at a small p, if pages can be rediscovered</td></tr>
-    <tr><td>Filter before a disk lookup</td><td>One unnecessary disk read</td><td>Yes — p only sets the extra load</td></tr>
-    <tr><td>Cache admission ("seen before?")</td><td>A one-hit item is cached</td><td>Yes — a little wasted cache space</td></tr>
-    <tr><td>"Has this password been breached?"</td><td>User asked to pick another password</td><td>Yes (mild annoyance)</td></tr>
-    <tr><td>"Is this user authorised?"</td><td>Access granted to an attacker</td><td><strong>No</strong></td></tr>
-    <tr><td>"Already paid?" → skip the charge</td><td>A real payment is dropped</td><td><strong>No</strong> (without an exact check)</td></tr>
-    <tr><td>"Already deleted?" → skip deletion</td><td>Data that must be deleted survives</td><td><strong>No</strong> (compliance)</td></tr>
-  </table>
-  <aside class="notes">
-    <p><span class="t">01:06</span></p>
-    <h4>Say</h4>
-    <p>"Same structure, same p. The only thing that changes down the table is what a 'maybe' does. When the action on a false positive is irreversible, security-relevant or financial, the filter may only be used to <em>avoid work</em>, never to <em>decide</em>."</p>
-    <h4>Ask</h4>
-    <p>"Could a Bloom filter be safe for authorisation if it stored the <em>denied</em> users instead?" Then a false positive denies a legitimate user (annoying, safe) — the direction of the error flips with what you store. Good design question: choose what the set contains so that its error is the harmless one.</p>
-    <h4>Adversarial inputs</h4>
-    <p>If attackers can choose keys and know the hash function, they can craft keys that are false positives (e.g. URLs that the crawler will always skip), or fill the filter with junk to raise p for everyone. Defences: keyed/secret hash seeds (Lecture 2), rate limits on insertions, monitoring the fill ratio.</p>
-  </aside>
-</section>
-
-<section class="slide">
-  <h2>Deletion, saturation, distribution</h2>
-  <div class="cols small">
-    <div>
-      <ul>
-        <li><strong>No deletion</strong>: clearing a bit can create false negatives for other keys</li>
-        <li><strong>Counting Bloom filter</strong>: small counters instead of bits (≈4× memory); deletion becomes possible — deleting a key that was never added corrupts it</li>
-        <li><strong>Time-partitioned filters</strong>: one per day; "delete" = drop old days</li>
-      </ul>
-    </div>
-    <div>
-      <ul>
-        <li><strong>Saturation</strong>: monitor fill ratio; rebuild or add a layer</li>
-        <li><strong>Mergeable</strong>: OR per-worker filters with identical parameters</li>
-        <li><strong>Monitor actual error</strong>: sample "maybe" answers and verify against the exact store — the observed p is a production metric</li>
-      </ul>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:12</span></p>
-    <h4>Capacity drift in production</h4>
-    <p>Filters are sized for a forecast; traffic grows; nobody resizes; p climbs from 1% to 15% over a year, and the exact store's load rises 15×. The first symptom is "the database got slower", not "the filter is full". The fix is to measure p directly: the exact store knows when a "maybe" was a false positive — count them.</p>
-    <h4>Alternatives to mention</h4>
-    <p>Cuckoo filters support deletion and have better cache behaviour at low p; quotient/XOR filters are more compact for static sets. Names only.</p>
-  </aside>
-</section>
-
-<section class="slide">
-  <h2>Count-Min Sketch: approximate frequencies</h2>
-  <div class="cols wide-r">
-    <div class="small">
-      <ul>
-        <li>d rows × w counters; each row has its own hash</li>
-        <li>add(x): increment one counter per row</li>
-        <li>estimate(x): <strong>minimum</strong> over rows</li>
-        <li>With nonnegative updates it never underestimates</li>
-        <li>Under the standard hash assumptions: estimate ≤ true + εN with probability ≥ 1 − δ, for w = e/ε, d = ln(1/δ)</li>
-        <li>Error is relative to the <strong>total stream</strong>, not to the key</li>
-      </ul>
-    </div>
-    <table class="tight small">
-      <tr><th>ε</th><th class="num">memory</th><th class="num">bound εN</th><th class="num">median error, top-100 keys</th></tr>
-      <tr><td>0.01</td><td class="num">11 KB</td><td class="num">20,000</td><td class="num">115%</td></tr>
-      <tr><td>0.001</td><td class="num">106 KB</td><td class="num">2,000</td><td class="num">7%</td></tr>
-      <tr><td>0.0001</td><td class="num">1.06 MB</td><td class="num">200</td><td class="num">0.2%</td></tr>
-    </table>
-  </div>
-  <p class="xsmall muted">2M-event Zipf stream, 158,580 distinct keys; exact counts need ~7.6 MB. <code>cms_demo.cpp</code>, one run.</p>
-  <aside class="notes">
-    <p><span class="t">01:18</span></p>
-    <h4>Rigour: theory vs our implementation</h4>
-    <p>The bound (estimate ≤ true + εN with probability ≥ 1 − δ) is a theorem under the standard assumptions: pairwise-independent hash functions per row and nonnegative updates. Our implementation uses mixed, seeded 64-bit hashes; that is common practice, but it is not a proof that the assumptions hold. The demo's result (no tail key exceeded the bound) is empirical evidence about this implementation on this stream, not a verification of the theorem. With negative updates (deletions as −1), the "never underestimates" property no longer holds.</p>
-    <h4>Use cases</h4>
-    <p>Heavy-hitter detection (top talkers for abuse/rate limiting), network telemetry, query frequency for cache admission (TinyLFU in Caffeine uses a Count-Min-style sketch — Lecture 3), approximate joins.</p>
-    <h4>Read the table</h4>
-    <p>At ε = 0.01 (11 KB!) even the top-100 keys are overestimated by more than 100%: each is only ~0.1% of the stream, well below εN. Only true heavy hitters (&gt; 1% of the stream) are reliable. At ε = 0.0001 (1 MB, still 7× smaller than exact) the top keys are within 0.2%. The error budget depends on which keys you care about.</p>
-    <h4>Mergeability</h4>
-    <p>Two sketches with the same dimensions and hashes add element-wise: per-server sketches can be summed centrally. That is why sketches dominate distributed telemetry.</p>
-    <h4>HyperLogLog (one minute)</h4>
-    <p>Counts <em>distinct</em> elements (unique visitors) in ~12 KB with under 1% standard error (Redis: 0.81%), mergeable across servers (Redis PFCOUNT). Mention only.</p>
-  </aside>
-</section>
-
-<section class="slide">
-  <h2>When is a probabilistic structure dangerous?</h2>
-  <div class="cols small">
-    <div class="box bad">
-      <span class="label">Red flags</span>
-      <ul class="xsmall">
-        <li>The answer <em>decides</em> an irreversible, security or financial action</li>
-        <li>Nobody knows the actual n (capacity drift)</li>
-        <li>The error rate is not monitored in production</li>
-        <li>Keys are attacker-controlled and the hash is public</li>
-        <li>Parameters/hash can change without rebuilding stored filters</li>
-      </ul>
-    </div>
-    <div class="box good">
-      <span class="label">Safe patterns</span>
-      <ul class="xsmall">
-        <li>Filter <em>before</em> an exact source of truth</li>
-        <li>Store the set whose error is harmless</li>
-        <li>Size for growth; alert on fill ratio</li>
-        <li>Count observed false positives</li>
-        <li>Version the parameters with the data</li>
-      </ul>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:25</span></p>
-    <h4>Transition to break</h4>
-    <p>"After the break you will plan a filter on paper, then find out how good your plan is — and how easy it is to draw the wrong conclusion from too few samples."</p>
-  </aside>
 </section>
 
 <section class="slide divider">
-  <span class="kicker">01:30–01:40</span>
-  <h1>Break — 10 minutes</h1>
-  <p>Download <code>Lecture_10/Student_Resources/</code></p>
+<span class="kicker">Part 3 · 01:00–01:30</span>
+<h1>Error budgets, placement, danger</h1>
 </section>
+<section class="slide">
+<h2>Placement: a filter in front of the truth</h2>
+<svg aria-label="Bloom filter before an exact store" viewbox="0 0 1150 230">
+<defs><marker id="a10" markerheight="7" markerwidth="7" orient="auto" refx="9" refy="5" viewbox="0 0 10 10"><path d="M0,0L10,5L0,10z" fill="#14304a"></path></marker></defs>
+<g font-family="Segoe UI, Arial" font-size="16">
+<rect fill="#f5f6f8" height="56" rx="8" stroke="#14304a" width="140" x="20" y="80"></rect><text x="44" y="113">lookup(key)</text>
+<rect fill="#e3f1f2" height="76" rx="8" stroke="#0b6e75" stroke-width="2" width="190" x="240" y="70"></rect><text x="258" y="102">Bloom filter</text><text font-size="14" x="258" y="126">in memory, ~1 GB</text>
+<rect fill="#e8f5ec" height="60" rx="8" stroke="#1f6b33" width="230" x="560" y="10"></rect><text x="578" y="46">"definitely not" → done</text>
+<rect fill="#fff4e0" height="76" rx="8" stroke="#9a5b00" stroke-width="2" width="250" x="560" y="140"></rect><text x="578" y="172">exact store (disk / DB)</text><text font-size="14" x="578" y="196">~1% of new keys + true hits</text>
+<g fill="none" stroke="#14304a" stroke-width="2"><path d="M160,108 L237,108" marker-end="url(#a10)"></path><path d="M430,95 L557,45" marker-end="url(#a10)"></path><path d="M430,125 L557,175" marker-end="url(#a10)"></path></g>
+<text fill="#1f6b33" font-size="14" x="445" y="58">no</text><text fill="#9a5b00" font-size="14" x="445" y="170">maybe</text>
+<text fill="#46505e" font-size="15" x="850" y="100">The filter saves work;</text><text fill="#46505e" font-size="15" x="850" y="124">the exact store keeps</text><text fill="#46505e" font-size="15" x="850" y="148">the answers correct.</text>
+</g>
+</svg>
 
-<!-- ====================== PART 4 ====================== -->
+</section>
+<section class="slide">
+<h2>What does an error cost?</h2>
+<table class="small">
+<tr><th>System</th><th>False positive causes…</th><th>Acceptable?</th></tr>
+<tr><td>Crawler "seen URL?"</td><td>A new page is skipped</td><td>Usually, at a small p, if pages can be rediscovered</td></tr>
+<tr><td>Filter before a disk lookup</td><td>One unnecessary disk read</td><td>Yes — p only sets the extra load</td></tr>
+<tr><td>Cache admission ("seen before?")</td><td>A one-hit item is cached</td><td>Yes — a little wasted cache space</td></tr>
+<tr><td>"Has this password been breached?"</td><td>User asked to pick another password</td><td>Yes (mild annoyance)</td></tr>
+<tr><td>"Is this user authorised?"</td><td>Access granted to an attacker</td><td><strong>No</strong></td></tr>
+<tr><td>"Already paid?" → skip the charge</td><td>A real payment is dropped</td><td><strong>No</strong> (without an exact check)</td></tr>
+<tr><td>"Already deleted?" → skip deletion</td><td>Data that must be deleted survives</td><td><strong>No</strong> (compliance)</td></tr>
+</table>
+
+</section>
+<section class="slide">
+<h2>Deletion, saturation, distribution</h2>
+<div class="cols small">
+<div>
+<ul>
+<li><strong>No deletion</strong>: clearing a bit can create false negatives for other keys</li>
+<li><strong>Counting Bloom filter</strong>: small counters instead of bits (≈4× memory); deletion becomes possible — deleting a key that was never added corrupts it</li>
+<li><strong>Time-partitioned filters</strong>: one per day; "delete" = drop old days</li>
+</ul>
+</div>
+<div>
+<ul>
+<li><strong>Saturation</strong>: monitor fill ratio; rebuild or add a layer</li>
+<li><strong>Mergeable</strong>: OR per-worker filters with identical parameters</li>
+<li><strong>Monitor actual error</strong>: sample "maybe" answers and verify against the exact store — the observed p is a production metric</li>
+</ul>
+</div>
+</div>
+
+</section>
+<section class="slide">
+<h2>Count-Min Sketch: approximate frequencies</h2>
+<div class="cols wide-r">
+<div class="small">
+<ul>
+<li>d rows × w counters; each row has its own hash</li>
+<li>add(x): increment one counter per row</li>
+<li>estimate(x): <strong>minimum</strong> over rows</li>
+<li>With nonnegative updates it never underestimates</li>
+<li>Under the standard hash assumptions: estimate ≤ true + εN with probability ≥ 1 − δ, for w = e/ε, d = ln(1/δ)</li>
+<li>Error is relative to the <strong>total stream</strong>, not to the key</li>
+</ul>
+</div>
+<table class="tight small">
+<tr><th>ε</th><th class="num">memory</th><th class="num">bound εN</th><th class="num">median error, top-100 keys</th></tr>
+<tr><td>0.01</td><td class="num">11 KB</td><td class="num">20,000</td><td class="num">115%</td></tr>
+<tr><td>0.001</td><td class="num">106 KB</td><td class="num">2,000</td><td class="num">7%</td></tr>
+<tr><td>0.0001</td><td class="num">1.06 MB</td><td class="num">200</td><td class="num">0.2%</td></tr>
+</table>
+</div>
+<p class="xsmall muted">2M-event Zipf stream, 158,580 distinct keys; exact counts need ~7.6 MB. <code>cms_demo.cpp</code>, one run.</p>
+
+</section>
+<section class="slide">
+<h2>When is a probabilistic structure dangerous?</h2>
+<div class="cols small">
+<div class="box bad">
+<span class="label">Red flags</span>
+<ul class="xsmall">
+<li>The answer <em>decides</em> an irreversible, security or financial action</li>
+<li>Nobody knows the actual n (capacity drift)</li>
+<li>The error rate is not monitored in production</li>
+<li>Keys are attacker-controlled and the hash is public</li>
+<li>Parameters/hash can change without rebuilding stored filters</li>
+</ul>
+</div>
+<div class="box good">
+<span class="label">Safe patterns</span>
+<ul class="xsmall">
+<li>Filter <em>before</em> an exact source of truth</li>
+<li>Store the set whose error is harmless</li>
+<li>Size for growth; alert on fill ratio</li>
+<li>Count observed false positives</li>
+<li>Version the parameters with the data</li>
+</ul>
+</div>
+</div>
+
+</section>
 <section class="slide divider">
-  <span class="kicker">Part 4 · 01:40–02:20</span>
-  <h1>Lab: plan, implement, measure</h1>
+<span class="kicker">01:30–01:40</span>
+<h1>Break — 10 minutes</h1>
+<p>Download <code>Lecture_10/Student_Resources/</code></p>
 </section>
 
-<section class="slide">
-  <h2>Lab brief (pairs)</h2>
-  <div class="cols wide-l small">
-    <div>
-      <ol>
-        <li><strong>Implement</strong> <code>add</code> and <code>might_contain</code> (double hashing); pass <code>bloom_test.cpp</code> (10 min)</li>
-        <li><strong>Plan</strong> for n = 100,000, p = 1%: write m, KB, k, predicted p; predicted p at 2× and 4× n (10 min)</li>
-        <li><strong>Measure</strong> with <code>bloom_lab.cpp</code>: false negatives, FP rate over 5 seeds, small samples, overfill, varying k (15 min)</li>
-        <li>Optional: <code>cms_demo.cpp</code></li>
-      </ol>
-    </div>
-    <div class="box plain xsmall">
-      <span class="label">Build</span>
-      <code>g++ -std=c++20 -O1 -g bloom_test.cpp</code><br><code>g++ -std=c++20 -O2 bloom_lab.cpp</code><br><br>
-      <span class="label">Formulas</span>
-      m = −n ln p / (ln 2)²<br>k = (m/n) ln 2<br>p ≈ (1 − e<sup>−kn/m</sup>)<sup>k</sup>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:40</span></p>
-    <h4>Implementation hint</h4>
-    <p>h1 = mix64(key ^ seed), h2 = mix64(h1) | 1 (odd, so successive probes differ); bit_i = (h1 + i·h2) mod m. <code>might_contain</code> returns false at the first unset bit. Solution: <code>Instructor_Only/Lecture_10/bloom_solution.hpp</code>.</p>
-    <h4>Expected plan</h4>
-    <p>m = 958,506 bits ≈ 117 KB (9.59 bits/element), k = 7, p = 1.004%; at 2n ≈ 15.7%, at 4n ≈ 67.9%. Most students predict "2% at 2n" — the non-linearity is the lesson.</p>
-    <h4>Test design note</h4>
-    <p><code>bloom_test.cpp</code> checks the FP rate with a <em>wide band</em> (0.3%–2% for an expected 1%): a tight band would make the test flaky, a band that is too wide would not catch a broken hash. Ask students to justify the band — this is the same variance question as Part 5.</p>
-  </aside>
-</section>
-
-<!-- ====================== PART 5 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 5 · 02:20–02:45</span>
-  <h1>Interpreting error rates</h1>
+<span class="kicker">Part 4 · 01:40–02:20</span>
+<h1>Lab: plan, implement, measure</h1>
+</section>
+<section class="slide">
+<h2>Lab brief (pairs)</h2>
+<div class="cols wide-l small">
+<div>
+<ol>
+<li><strong>Implement</strong> <code>add</code> and <code>might_contain</code> (double hashing); pass <code>bloom_test.cpp</code> (10 min)</li>
+<li><strong>Plan</strong> for n = 100,000, p = 1%: write m, KB, k, predicted p; predicted p at 2× and 4× n (10 min)</li>
+<li><strong>Measure</strong> with <code>bloom_lab.cpp</code>: false negatives, FP rate over 5 seeds, small samples, overfill, varying k (15 min)</li>
+<li>Optional: <code>cms_demo.cpp</code></li>
+</ol>
+</div>
+<div class="box plain xsmall">
+<span class="label">Build</span>
+<code>g++ -std=c++20 -O1 -g bloom_test.cpp</code><br/><code>g++ -std=c++20 -O2 bloom_lab.cpp</code><br/><br/>
+<span class="label">Formulas</span>
+      m = −n ln p / (ln 2)²<br/>k = (m/n) ln 2<br/>p ≈ (1 − e<sup>−kn/m</sup>)<sup>k</sup>
+</div>
+</div>
+
 </section>
 
-<section class="slide">
-  <h2>How sure are we about "p = 1%"?</h2>
-  <div class="cols small">
-    <div>
-      <h3>10⁶ probes per seed</h3>
-      <table class="tight">
-        <tr><th>seed</th><th class="num">observed p</th><th>≈ 95% interval</th></tr>
-        <tr><td>1</td><td class="num">1.000%</td><td>0.980–1.019</td></tr>
-        <tr><td>2</td><td class="num">0.989%</td><td>0.970–1.008</td></tr>
-        <tr><td>3</td><td class="num">1.008%</td><td>0.989–1.028</td></tr>
-        <tr><td>4</td><td class="num">0.996%</td><td>0.976–1.015</td></tr>
-        <tr><td>5</td><td class="num">1.000%</td><td>0.980–1.019</td></tr>
-      </table>
-    </div>
-    <div>
-      <h3>1,000 probes per run</h3>
-      <p class="lead" style="font-size:24px">0.80% · 0.90% · 1.30% · 1.50% · 1.40%</p>
-      <p>Interval with 1,000 probes ≈ ±0.6 percentage points</p>
-      <div class="box warn xsmall">From one small run you could "show" that the filter is 20% better or 50% worse than designed.</div>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">02:20</span></p>
-    <h4>Intuitive uncertainty</h4>
-    <p>Counting false positives is estimating a proportion. With N probes and true rate p, the standard error is √(p(1−p)/N): for p = 1%, N = 10⁶ → ±0.01 pp (so the 95% interval is about ±0.02 pp); N = 1,000 → ±0.3 pp (±0.6 pp at 95%). To measure a 1% rate to ±10% relative accuracy you need tens of thousands of probes. Rare events need big samples.</p>
-    <h4>Also</h4>
-    <p>Seeds vary two things: the inserted keys and the filter's hash seed. The spread across seeds is small here because each run already has 10⁶ probes. In production, the observed p also depends on the key distribution (Lecture 2: structured keys + weak hash → higher p than the formula).</p>
-    <h4>Teaching point</h4>
-    <p>"Never write 'the false-positive rate is X' without the sample size or an interval." The same rule applies to every benchmark in your project — Lecture 12 generalises it.</p>
-  </aside>
+<section class="slide divider">
+<span class="kicker">Part 5 · 02:20–02:45</span>
+<h1>Interpreting error rates</h1>
 </section>
-
 <section class="slide">
-  <h2>If p = 1%, is that acceptable?</h2>
-  <div class="cols small">
-    <div>
-      <p><strong>It depends on what a false positive causes.</strong> Turn p into product units:</p>
-      <ul>
-        <li>Crawler: 200,000 checks/s × 1% of new URLs → pages skipped per day?</li>
-        <li>Disk filter: 1% of misses → extra disk reads/s → is the store sized for it?</li>
-        <li>Payments: 1% of anything → unacceptable as a decision</li>
-      </ul>
-    </div>
-    <div class="box q">
-      <span class="label">Groups · 5 min</span>
+<h2>How sure are we about "p = 1%"?</h2>
+<div class="cols small">
+<div>
+<h3>10⁶ probes per seed</h3>
+<table class="tight">
+<tr><th>seed</th><th class="num">observed p</th><th>≈ 95% interval</th></tr>
+<tr><td>1</td><td class="num">1.000%</td><td>0.980–1.019</td></tr>
+<tr><td>2</td><td class="num">0.989%</td><td>0.970–1.008</td></tr>
+<tr><td>3</td><td class="num">1.008%</td><td>0.989–1.028</td></tr>
+<tr><td>4</td><td class="num">0.996%</td><td>0.976–1.015</td></tr>
+<tr><td>5</td><td class="num">1.000%</td><td>0.980–1.019</td></tr>
+</table>
+</div>
+<div>
+<h3>1,000 probes per run</h3>
+<p class="lead" style="font-size:24px">0.80% · 0.90% · 1.30% · 1.50% · 1.40%</p>
+<p>Interval with 1,000 probes ≈ ±0.6 percentage points</p>
+<div class="box warn xsmall">From one small run you could "show" that the filter is 20% better or 50% worse than designed.</div>
+</div>
+</div>
+
+</section>
+<section class="slide">
+<h2>If p = 1%, is that acceptable?</h2>
+<div class="cols small">
+<div>
+<p><strong>It depends on what a false positive causes.</strong> Turn p into product units:</p>
+<ul>
+<li>Crawler: 200,000 checks/s × 1% of new URLs → pages skipped per day?</li>
+<li>Disk filter: 1% of misses → extra disk reads/s → is the store sized for it?</li>
+<li>Payments: 1% of anything → unacceptable as a decision</li>
+</ul>
+</div>
+<div class="box q">
+<span class="label">Groups · 5 min</span>
       The crawler discovers 50M new URLs/day. At p = 1%, how many new pages are never fetched per day? Would you pay 0.6 GB more RAM per worker to reach 0.1%?
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">02:32</span></p>
-    <h4>Expected answer</h4>
-    <p>50M × 1% = 500,000 new pages skipped per day (unless rediscovered). At 0.1%: 50,000. Going from 1% to 0.1% costs 1.5× memory (1.2 → 1.8 GB for 10⁹ URLs). Whether 450,000 extra pages/day are worth 0.6 GB per worker is a business decision — but it can now be made with numbers instead of adjectives.</p>
-    <h4>Debrief: what students should conclude</h4>
-    <ol>
-      <li>No false negatives observed — and a correct implementation should never produce one.</li>
-      <li>The formula predicts the observed p well <em>for well-mixed hashes</em>.</li>
-      <li>Capacity errors hurt non-linearly; monitor the fill ratio.</li>
-      <li>Small samples mislead; always state the sample size.</li>
-      <li>Acceptability is a product question, answered in product units.</li>
-    </ol>
-  </aside>
+</div>
+
 </section>
 
-<!-- ====================== PART 6 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 6 · 02:45–03:00</span>
-  <h1>Project: what will your benchmark test?</h1>
+<span class="kicker">Part 6 · 02:45–03:00</span>
+<h1>Project: what will your benchmark test?</h1>
 </section>
-
 <section class="slide">
-  <h2>Before the 5 Dec checkpoint, answer in writing</h2>
-  <div class="cols small">
-    <ol>
-      <li>What <strong>claim</strong> will your benchmark test? (one falsifiable sentence)</li>
-      <li>What <strong>baseline</strong> will you compare against?</li>
-      <li>What <strong>workload</strong> — and why is it representative?</li>
-      <li>What result would <strong>falsify</strong> your hypothesis?</li>
-      <li>How many repetitions/samples, and how will you report spread?</li>
-    </ol>
-    <div class="box key">
-      <span class="label">Deadline</span>
-      <strong>Testing + benchmarking checkpoint — Sat 5 Dec 2026, 23:59 Cairo</strong><br><span class="xsmall">Tests incl. differential/randomized; harness; first raw results with environment; draft <code>docs/evaluation.md</code>.</span>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">02:45</span></p>
-    <h4>Activity (10 min)</h4>
-    <p>Each team writes answers 1–4 on one card; swap with a neighbour, who tries to find a result that would be consistent with the claim no matter what (an unfalsifiable claim). Example of an unfalsifiable claim: "our design performs well". A falsifiable one: "for 1M keys and 90% reads, our sharded cache has lower p99 latency than the global-lock baseline at 8 threads".</p>
-    <h4>If a project uses an approximate structure</h4>
-    <p>Its evaluation must report the observed error rate with sample size, the planned vs actual capacity, and the product cost of an error.</p>
-  </aside>
-</section>
+<h2>Before the 5 Dec checkpoint, answer in writing</h2>
+<div class="cols small">
+<ol>
+<li>What <strong>claim</strong> will your benchmark test? (one falsifiable sentence)</li>
+<li>What <strong>baseline</strong> will you compare against?</li>
+<li>What <strong>workload</strong> — and why is it representative?</li>
+<li>What result would <strong>falsify</strong> your hypothesis?</li>
+<li>How many repetitions/samples, and how will you report spread?</li>
+</ol>
+<div class="box key">
+<span class="label">Deadline</span>
+<strong>Testing + benchmarking checkpoint — Sat 5 Dec 2026, 23:59 Cairo</strong><br/><span class="xsmall">Tests incl. differential/randomized; harness; first raw results with environment; draft <code>docs/evaluation.md</code>.</span>
+</div>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Summary</h2>
-  <ol>
-    <li>Probabilistic structures trade certainty for memory, bandwidth or time — deliberately.</li>
-    <li>A Bloom filter's error is one-sided; p ≈ (fill)<sup>k</sup>; ~4.8 bits per element per 10× in p.</li>
-    <li>Exceeding planned capacity degrades p non-linearly and silently; monitor fill and observed p.</li>
-    <li>Put the approximation in front of an exact source of truth; never let it decide irreversible actions.</li>
-    <li>Count-Min Sketch: never under (nonnegative updates); over by ≤ εN with probability ≥ 1 − δ under its hash assumptions — good for heavy hitters, poor for small counts.</li>
-    <li>Error rates are measurements: report sample sizes and uncertainty.</li>
-  </ol>
-  <p class="small muted">Next: Lecture 11 · Sat 5 Dec — Concurrency, Memory and Hardware-Aware Data Structures · <strong>Testing + benchmarking checkpoint due 5 Dec</strong>.</p>
-  <aside class="notes"><p>Exit question: "Where in your project could you accept an approximate answer, and what would one wrong answer cost?"</p></aside>
-</section>
+<h2>Summary</h2>
+<ol>
+<li>Probabilistic structures trade certainty for memory, bandwidth or time — deliberately.</li>
+<li>A Bloom filter's error is one-sided; p ≈ (fill)<sup>k</sup>; ~4.8 bits per element per 10× in p.</li>
+<li>Exceeding planned capacity degrades p non-linearly and silently; monitor fill and observed p.</li>
+<li>Put the approximation in front of an exact source of truth; never let it decide irreversible actions.</li>
+<li>Count-Min Sketch: never under (nonnegative updates); over by ≤ εN with probability ≥ 1 − δ under its hash assumptions — good for heavy hitters, poor for small counts.</li>
+<li>Error rates are measurements: report sample sizes and uncertainty.</li>
+</ol>
+<p class="small muted">Next: Lecture 11 · Sat 5 Dec — Concurrency, Memory and Hardware-Aware Data Structures · <strong>Testing + benchmarking checkpoint due 5 Dec</strong>.</p>
 
+</section>
 <script src="../common/slides.js"></script>
 </body>
 </html>

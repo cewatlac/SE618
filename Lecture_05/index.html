@@ -1,239 +1,165 @@
+<!doctype html>
 <!DOCTYPE html>
+
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1" name="viewport"/>
 <title>SE618 L5 — Search Systems and Inverted Indexes</title>
-<link rel="stylesheet" href="../common/styles.css">
-<link rel="stylesheet" href="../common/print.css">
-</head>
-<body data-course="SE618" data-lecture="Lecture 5 · Sat 24 Oct 2026">
-
+<link href="../common/styles.css" rel="stylesheet"/>
+<link href="../common/print.css" rel="stylesheet"/>
+<meta content="SE618 Lecture 5: Search Systems and Inverted Indexes. Student-facing interactive slides." name="description"/></head>
+<body data-course="SE618" data-lecture="Lecture 5 · Sat 24 Oct 2026" data-public="true">
 <section class="slide title">
-  <span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
-  <h1>Lecture 5<br>Search Systems and Inverted Indexes</h1>
-  <p>An index buys query speed with storage, build time and update complexity. Is the trade worth it?</p>
-  <div class="meta">Saturday 24 October 2026 · 3 hours<br>Architecture / design / API document due next Saturday, 31 Oct</div>
-  <aside class="notes">
-    <h4>Plan (3h)</h4>
-    <table><tr><td>00:00–00:20</td><td>Part 1 — Scenario: knowledge-base search that stopped scaling</td></tr>
-    <tr><td>00:20–01:00</td><td>Part 2 — Forward vs inverted index; analysis pipeline; postings; Boolean queries; intersection; ranking</td></tr>
-    <tr><td>01:00–01:30</td><td>Part 3 — Engineering trade-offs: size, build, updates, freshness, consistency, API, invariants</td></tr>
-    <tr><td>01:30–01:40</td><td>Break</td></tr>
-    <tr><td>01:40–02:20</td><td>Part 4 — Hands-on: finish the index (intersection, removal) + write the hypothesis</td></tr>
-    <tr><td>02:20–02:45</td><td>Part 5 — Experiment: scan vs index — what did we spend?</td></tr>
-    <tr><td>02:45–03:00</td><td>Part 6 — Project: "what is your index?"; design-document deadline</td></tr></table>
-    <h4>Prepare</h4>
-    <p><code>Student_Resources/</code>: <code>inverted_index.hpp</code> (starter with TODO 1 intersect and TODO 2 remove), <code>index_test.cpp</code>, <code>index_bench.cpp</code> (~30 s), <code>search_demo.cpp</code> + <code>sample_docs.txt</code>, <code>EXERCISE.md</code>. Solution: <code>Instructor_Only/Lecture_05/inverted_index_solution.hpp</code>. Compile the bench against the solution before class (<code>-DSOLUTION -I../../../Instructor_Only/Lecture_05</code>) so you can run it live.</p>
-    <p>Proposal feedback should be returned today (24 Oct), as announced in the schedule.</p>
-  </aside>
-</section>
+<span class="kicker">SE618 · Engineering Data Structures for Scalable Software Systems</span>
+<h1>Lecture 5<br/>Search Systems and Inverted Indexes</h1>
+<p>An index buys query speed with storage, build time and update complexity. Is the trade worth it?</p>
+<div class="meta">Saturday 24 October 2026 · 3 hours<br/>Architecture / design / API document due next Saturday, 31 Oct</div>
 
+</section>
 <section class="slide">
-  <h2>Where we are</h2>
-  <div class="cols">
-    <div class="small">
-      <ul>
-        <li>L2: hash maps — O(1) is conditional</li>
-        <li>L3: caches — the workload picks the policy</li>
-        <li>L4: autocomplete — ranking the matches is where the cost is</li>
-      </ul>
-      <p>Today we generalise L4 from "prefix of one string" to "which of millions of documents contain these words?" — and we pay attention to <em>writes</em> for the first time.</p>
-    </div>
-    <div class="box key">
-      <span class="label">Today's distinctive lesson</span>
+<h2>Where we are</h2>
+<div class="cols">
+<div class="small">
+<ul>
+<li>L2: hash maps — O(1) is conditional</li>
+<li>L3: caches — the workload picks the policy</li>
+<li>L4: autocomplete — ranking the matches is where the cost is</li>
+</ul>
+<p>Today we generalise L4 from "prefix of one string" to "which of millions of documents contain these words?" — and we pay attention to <em>writes</em> for the first time.</p>
+</div>
+<div class="box key">
+<span class="label">Today's distinctive lesson</span>
       An index is <strong>precomputed work</strong>. It trades storage, build time and update complexity for query latency. Whether the trade is worth it depends on the query rate, the update rate and the freshness requirement.
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:00</span> 2 minutes.</p>
-    <h4>Ask</h4>
-    <p>"In Lecture 4, which design had the fastest queries, and what did it cost?" Expected: trie with cached top-k — highest memory and hardest updates. "Today's structure has exactly the same shape of trade-off: precomputation paid on write, collected on read."</p>
-    <h4>Proposal feedback</h4>
-    <p>If you are returning proposal feedback today, mention the common issues you saw (usually: no numbers in the workload, only one design, hypothesis that cannot fail). Keep it to one minute; Part 6 returns to the project.</p>
-  </aside>
+</div>
+
 </section>
 
-<!-- ====================== PART 1 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 1 · 00:00–00:20</span>
-  <h1>Scenario: search that<br>stopped scaling</h1>
+<span class="kicker">Part 1 · 00:00–00:20</span>
+<h1>Scenario: search that<br/>stopped scaling</h1>
 </section>
-
 <section class="slide">
-  <h2>The scenario</h2>
-  <div class="cols wide-l small">
-    <div>
-      <p>An internal knowledge base (support articles, runbooks, tickets) launched with <strong>4,000</strong> documents. Search = "for each document, does it contain every query word?" It was fine.</p>
-      <p>Three years later:</p>
-      <ul>
-        <li><strong>3 million</strong> documents, ~400 words each</li>
-        <li><strong>200 searches/s</strong> at peak; support agents expect results while typing</li>
-        <li>~<strong>50 new or edited</strong> documents per minute</li>
-        <li>Search p95 has grown to <strong>seconds</strong></li>
-      </ul>
-    </div>
-    <div class="box q"><span class="label">Before naming any structure</span>
+<h2>The scenario</h2>
+<div class="cols wide-l small">
+<div>
+<p>An internal knowledge base (support articles, runbooks, tickets) launched with <strong>4,000</strong> documents. Search = "for each document, does it contain every query word?" It was fine.</p>
+<p>Three years later:</p>
+<ul>
+<li><strong>3 million</strong> documents, ~400 words each</li>
+<li><strong>200 searches/s</strong> at peak; support agents expect results while typing</li>
+<li>~<strong>50 new or edited</strong> documents per minute</li>
+<li>Search p95 has grown to <strong>seconds</strong></li>
+</ul>
+</div>
+<div class="box q"><span class="label">Before naming any structure</span>
       What do you need to know about the workload? Write six questions. (3 min, pairs)</div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:03</span></p>
-    <h4>Expected questions (collect on the board)</h4>
-    <ul>
-      <li>What queries occur? Single words, several words (AND? OR?), phrases, filters (date, product), ranking needed?</li>
-      <li>How many results are shown — all matches, or the top 10?</li>
-      <li>Query rate vs update rate (200/s vs ~1/s) — read-heavy.</li>
-      <li>How fresh must results be? Is "an edited runbook is searchable within 5 seconds" enough, or must it be immediate?</li>
-      <li>What memory/storage can we spend? One machine or many?</li>
-      <li>What must stay consistent — can search return a document that was just deleted (e.g. a leaked secret removed from a ticket)?</li>
-      <li>Languages? Arabic and English (Lecture 4 normalisation returns).</li>
-    </ul>
-    <h4>Teaching point</h4>
-    <p>The deletion question is a good hook: "a ticket containing a customer's password was deleted; it still appears in search for 10 minutes." That is a consistency requirement with security consequences, not a performance detail.</p>
-  </aside>
-</section>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Why the scan stopped scaling</h2>
-  <div class="cols">
-    <div class="small">
-      <p>Scan cost per query ≈ documents × words per document × work per word.</p>
-      <table class="tight">
-        <tr><th>Documents</th><th class="num">Scan, ms/query (measured)</th></tr>
-        <tr><td>1,000</td><td class="num">3.3</td></tr>
-        <tr><td>10,000</td><td class="num">34</td></tr>
-        <tr><td>50,000</td><td class="num">174</td></tr>
-        <tr><td>3,000,000 (extrapolated)</td><td class="num">~10,000</td></tr>
-      </table>
-      <p class="xsmall muted">Median per query, 60-word synthetic documents re-tokenised on every query; <code>index_bench.cpp</code>, one laptop. 3M is a linear extrapolation (~3.5 µs per document).</p>
-    </div>
-    <div class="box warn small">
-      <span class="label">Two separate problems</span>
-      <ul>
-        <li><strong>Latency:</strong> every query touches every byte of the corpus.</li>
-        <li><strong>Throughput:</strong> 200 q/s × 10 s of CPU per query = 2,000 cores.</li>
-      </ul>
+<h2>Why the scan stopped scaling</h2>
+<div class="cols">
+<div class="small">
+<p>Scan cost per query ≈ documents × words per document × work per word.</p>
+<table class="tight">
+<tr><th>Documents</th><th class="num">Scan, ms/query (measured)</th></tr>
+<tr><td>1,000</td><td class="num">3.3</td></tr>
+<tr><td>10,000</td><td class="num">34</td></tr>
+<tr><td>50,000</td><td class="num">174</td></tr>
+<tr><td>3,000,000 (extrapolated)</td><td class="num">~10,000</td></tr>
+</table>
+<p class="xsmall muted">Median per query, 60-word synthetic documents re-tokenised on every query; <code>index_bench.cpp</code>, one laptop. 3M is a linear extrapolation (~3.5 µs per document).</p>
+</div>
+<div class="box warn small">
+<span class="label">Two separate problems</span>
+<ul>
+<li><strong>Latency:</strong> every query touches every byte of the corpus.</li>
+<li><strong>Throughput:</strong> 200 q/s × 10 s of CPU per query = 2,000 cores.</li>
+</ul>
       Linear growth with corpus size is fine at 4,000 documents and hopeless at 3 million.
     </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:10</span></p>
-    <h4>Say</h4>
-    <p>"The scan did nothing wrong. Its cost is proportional to the corpus, and the corpus grew 750×. The question is not 'is scanning bad?' but 'at what size, query rate and update rate does it stop being the right product?'"</p>
-    <h4>Why the per-query cost is high even at 1,000 documents</h4>
-    <p>Our scan re-tokenises every document on every query (lower-casing, splitting, stop-word lookup, string allocations). A scan over pre-tokenised documents would be faster — but notice that "pre-tokenised documents" is already a <em>forward index</em>: precomputation has started to creep in. Plant this for the next slide.</p>
-    <h4>Ask</h4>
-    <p>"Why not just parallelise the scan over 64 cores?" Expected: that fixes latency (÷64) but not cost; 200 q/s still needs ~2,000 cores of work. Parallelism buys latency with hardware; an index buys it with precomputation. Both are legitimate; the second is usually cheaper at this read/write ratio.</p>
-  </aside>
+</div>
+
 </section>
 
-<!-- ====================== PART 2 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 2 · 00:20–01:00</span>
-  <h1>From documents to postings</h1>
+<span class="kicker">Part 2 · 00:20–01:00</span>
+<h1>From documents to postings</h1>
 </section>
-
 <section class="slide">
-  <h2>Forward index vs inverted index</h2>
-  <svg viewBox="0 0 1150 380" aria-label="documents map to terms, terms map to posting lists">
-    <g font-size="17" font-family="Segoe UI, Arial">
-      <text x="10" y="24" fill="#46505e">Forward index: doc → terms</text>
-      <rect x="10" y="40" width="330" height="60" rx="6" fill="#f5f6f8" stroke="#14304a"/><text x="22" y="66">d1: "LRU cache eviction"</text><text x="22" y="90" fill="#0b6e75" font-family="Consolas,monospace" font-size="15">[lru, cache, eviction]</text>
-      <rect x="10" y="115" width="330" height="60" rx="6" fill="#f5f6f8" stroke="#14304a"/><text x="22" y="141">d2: "cache stampede"</text><text x="22" y="165" fill="#0b6e75" font-family="Consolas,monospace" font-size="15">[cache, stampede]</text>
-      <rect x="10" y="190" width="330" height="60" rx="6" fill="#f5f6f8" stroke="#14304a"/><text x="22" y="216">d3: "LRU vs LFU"</text><text x="22" y="240" fill="#0b6e75" font-family="Consolas,monospace" font-size="15">[lru, lfu]</text>
-      <text x="610" y="24" fill="#46505e">Inverted index: term → posting list (doc, tf)</text>
-      <g font-family="Consolas,monospace" font-size="16">
-        <rect x="610" y="40" width="120" height="36" fill="#14304a"/><text x="622" y="64" fill="#fff">cache</text>
-        <rect x="745" y="40" width="90" height="36" rx="5" fill="#e3f1f2" stroke="#0b6e75"/><text x="755" y="64">d1,1</text>
-        <rect x="845" y="40" width="90" height="36" rx="5" fill="#e3f1f2" stroke="#0b6e75"/><text x="855" y="64">d2,1</text>
-        <rect x="610" y="90" width="120" height="36" fill="#14304a"/><text x="622" y="114" fill="#fff">eviction</text>
-        <rect x="745" y="90" width="90" height="36" rx="5" fill="#e3f1f2" stroke="#0b6e75"/><text x="755" y="114">d1,1</text>
-        <rect x="610" y="140" width="120" height="36" fill="#14304a"/><text x="622" y="164" fill="#fff">lfu</text>
-        <rect x="745" y="140" width="90" height="36" rx="5" fill="#e3f1f2" stroke="#0b6e75"/><text x="755" y="164">d3,1</text>
-        <rect x="610" y="190" width="120" height="36" fill="#14304a"/><text x="622" y="214" fill="#fff">lru</text>
-        <rect x="745" y="190" width="90" height="36" rx="5" fill="#e3f1f2" stroke="#0b6e75"/><text x="755" y="214">d1,1</text>
-        <rect x="845" y="190" width="90" height="36" rx="5" fill="#e3f1f2" stroke="#0b6e75"/><text x="855" y="214">d3,1</text>
-        <rect x="610" y="240" width="120" height="36" fill="#14304a"/><text x="622" y="264" fill="#fff">stampede</text>
-        <rect x="745" y="240" width="90" height="36" rx="5" fill="#e3f1f2" stroke="#0b6e75"/><text x="755" y="264">d2,1</text>
-      </g>
-      <path d="M355,150 C430,150 470,150 590,150" stroke="#0b6e75" stroke-width="3" fill="none" marker-end="url(#ar5)"/>
-      <text x="400" y="138" fill="#0b6e75">invert</text>
-      <defs><marker id="ar5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0L10,5L0,10z" fill="#0b6e75"/></marker></defs>
-      <text x="10" y="320" fill="#46505e">Query "lru cache" = intersect posting lists of lru and cache → {d1}. Touches 4 postings, not 3 documents.</text>
-      <text x="10" y="350" fill="#46505e">Cost now scales with the length of the posting lists involved, not with the size of the corpus.</text>
-    </g>
-  </svg>
-  <aside class="notes">
-    <p><span class="t">00:20</span></p>
-    <h4>Say</h4>
-    <p>"The forward index answers 'what is in this document?'. The inverted index answers 'which documents contain this term?'. Search needs the second; updates and deletions need the first. Production systems keep both."</p>
-    <h4>Ask</h4>
-    <p>"Our code keeps both. Why do we need the forward index at all?" Expected: to delete or update a document you must find its postings; without the forward index you would scan the whole vocabulary. Deletion cost = O(terms in the document) with it, O(vocabulary) without. Also: snippets, highlighting, re-ranking need the document content.</p>
-    <h4>Precise claim</h4>
-    <p>Query cost becomes roughly proportional to the sum of the posting-list lengths for the query terms. For rare terms that is tiny; for common terms ("the", "error") it approaches the corpus size — which is why stop words and ranking-aware early termination exist. The experiment will show exactly this gap.</p>
-  </aside>
+<h2>Forward index vs inverted index</h2>
+<svg aria-label="documents map to terms, terms map to posting lists" viewbox="0 0 1150 380">
+<g font-family="Segoe UI, Arial" font-size="17">
+<text fill="#46505e" x="10" y="24">Forward index: doc → terms</text>
+<rect fill="#f5f6f8" height="60" rx="6" stroke="#14304a" width="330" x="10" y="40"></rect><text x="22" y="66">d1: "LRU cache eviction"</text><text fill="#0b6e75" font-family="Consolas,monospace" font-size="15" x="22" y="90">[lru, cache, eviction]</text>
+<rect fill="#f5f6f8" height="60" rx="6" stroke="#14304a" width="330" x="10" y="115"></rect><text x="22" y="141">d2: "cache stampede"</text><text fill="#0b6e75" font-family="Consolas,monospace" font-size="15" x="22" y="165">[cache, stampede]</text>
+<rect fill="#f5f6f8" height="60" rx="6" stroke="#14304a" width="330" x="10" y="190"></rect><text x="22" y="216">d3: "LRU vs LFU"</text><text fill="#0b6e75" font-family="Consolas,monospace" font-size="15" x="22" y="240">[lru, lfu]</text>
+<text fill="#46505e" x="610" y="24">Inverted index: term → posting list (doc, tf)</text>
+<g font-family="Consolas,monospace" font-size="16">
+<rect fill="#14304a" height="36" width="120" x="610" y="40"></rect><text fill="#fff" x="622" y="64">cache</text>
+<rect fill="#e3f1f2" height="36" rx="5" stroke="#0b6e75" width="90" x="745" y="40"></rect><text x="755" y="64">d1,1</text>
+<rect fill="#e3f1f2" height="36" rx="5" stroke="#0b6e75" width="90" x="845" y="40"></rect><text x="855" y="64">d2,1</text>
+<rect fill="#14304a" height="36" width="120" x="610" y="90"></rect><text fill="#fff" x="622" y="114">eviction</text>
+<rect fill="#e3f1f2" height="36" rx="5" stroke="#0b6e75" width="90" x="745" y="90"></rect><text x="755" y="114">d1,1</text>
+<rect fill="#14304a" height="36" width="120" x="610" y="140"></rect><text fill="#fff" x="622" y="164">lfu</text>
+<rect fill="#e3f1f2" height="36" rx="5" stroke="#0b6e75" width="90" x="745" y="140"></rect><text x="755" y="164">d3,1</text>
+<rect fill="#14304a" height="36" width="120" x="610" y="190"></rect><text fill="#fff" x="622" y="214">lru</text>
+<rect fill="#e3f1f2" height="36" rx="5" stroke="#0b6e75" width="90" x="745" y="190"></rect><text x="755" y="214">d1,1</text>
+<rect fill="#e3f1f2" height="36" rx="5" stroke="#0b6e75" width="90" x="845" y="190"></rect><text x="855" y="214">d3,1</text>
+<rect fill="#14304a" height="36" width="120" x="610" y="240"></rect><text fill="#fff" x="622" y="264">stampede</text>
+<rect fill="#e3f1f2" height="36" rx="5" stroke="#0b6e75" width="90" x="745" y="240"></rect><text x="755" y="264">d2,1</text>
+</g>
+<path d="M355,150 C430,150 470,150 590,150" fill="none" marker-end="url(#ar5)" stroke="#0b6e75" stroke-width="3"></path>
+<text fill="#0b6e75" x="400" y="138">invert</text>
+<defs><marker id="ar5" markerheight="8" markerwidth="8" orient="auto" refx="9" refy="5" viewbox="0 0 10 10"><path d="M0,0L10,5L0,10z" fill="#0b6e75"></path></marker></defs>
+<text fill="#46505e" x="10" y="320">Query "lru cache" = intersect posting lists of lru and cache → {d1}. Touches 4 postings, not 3 documents.</text>
+<text fill="#46505e" x="10" y="350">Cost now scales with the length of the posting lists involved, not with the size of the corpus.</text>
+</g>
+</svg>
+
 </section>
-
 <section class="slide">
-  <h2>The analysis pipeline decides what "matches" means</h2>
-  <div class="flow" style="margin-bottom:18px"><span>raw text</span><span>tokenise</span><span>normalise (case, Unicode)</span><span>stop words?</span><span>stem / lemmatise?</span><span class="hl">terms</span></div>
-  <table class="small">
-    <tr><th>Step</th><th>Example</th><th>Engineering consequence</th></tr>
-    <tr><td>Tokenisation</td><td><code>cache-stampede</code> → 1 or 2 tokens? <code>C++</code>? <code>192.168.0.1</code>?</td><td>Recall for technical text; must match queries</td></tr>
-    <tr><td>Case / Unicode</td><td><code>LRU</code> = <code>lru</code>; Arabic folding (L4)</td><td>Same function at index and query time</td></tr>
-    <tr><td>Stop words</td><td>drop <code>the</code>, <code>of</code></td><td>Smaller index; the query "to be or not to be" breaks</td></tr>
-    <tr><td>Stemming</td><td><code>running</code>, <code>runs</code> → <code>run</code></td><td>More recall, less precision; language-specific</td></tr>
-  </table>
-  <div class="box key small" style="margin-top:12px">Changing the analyzer changes the meaning of every stored posting → a full <strong>re-index</strong>. Version it.</div>
-  <aside class="notes">
-    <p><span class="t">00:28</span></p>
-    <h4>Say</h4>
-    <p>"This is Lecture 4's normalisation contract again. Index-time and query-time analysis must agree exactly, or you get misses that look like data bugs."</p>
-    <h4>Stop words: the real trade-off</h4>
-    <p>Stop words make up a large share of all word occurrences in English text, so dropping them shrinks the index noticeably and removes the longest posting lists (which are the slowest to intersect). Cost: phrase queries and queries made only of stop words stop working. Modern engines often keep stop words and handle long lists with ranking-aware early termination and compression. There is no universal answer; the analyzer is a product decision.</p>
-    <h4>Stemming, at the right level</h4>
-    <p>Stemmers (e.g. Porter for English) apply suffix rules: fast, sometimes wrong ("university" and "universe" can collide). Lemmatisers use a dictionary: more accurate, slower, language-specific. For Arabic, root-based stemming is much more aggressive than English stemming. Do not go deeper — the point is the recall/precision trade and the re-index cost.</p>
-    <h4>Ask</h4>
-    <p>"In our sample docs, why does the query 'posting list' miss document 6 ('Posting lists…')?" Expected: no stemming — 'list' ≠ 'lists'. Is that a bug? It is a documented consequence of the analyzer.</p>
-  </aside>
+<h2>The analysis pipeline decides what "matches" means</h2>
+<div class="flow" style="margin-bottom:18px"><span>raw text</span><span>tokenise</span><span>normalise (case, Unicode)</span><span>stop words?</span><span>stem / lemmatise?</span><span class="hl">terms</span></div>
+<table class="small">
+<tr><th>Step</th><th>Example</th><th>Engineering consequence</th></tr>
+<tr><td>Tokenisation</td><td><code>cache-stampede</code> → 1 or 2 tokens? <code>C++</code>? <code>192.168.0.1</code>?</td><td>Recall for technical text; must match queries</td></tr>
+<tr><td>Case / Unicode</td><td><code>LRU</code> = <code>lru</code>; Arabic folding (L4)</td><td>Same function at index and query time</td></tr>
+<tr><td>Stop words</td><td>drop <code>the</code>, <code>of</code></td><td>Smaller index; the query "to be or not to be" breaks</td></tr>
+<tr><td>Stemming</td><td><code>running</code>, <code>runs</code> → <code>run</code></td><td>More recall, less precision; language-specific</td></tr>
+</table>
+<div class="box key small" style="margin-top:12px">Changing the analyzer changes the meaning of every stored posting → a full <strong>re-index</strong>. Version it.</div>
+
 </section>
-
 <section class="slide">
-  <h2>What a posting contains</h2>
-  <div class="cols small">
-    <div>
-      <table class="tight">
-        <tr><th>Posting payload</th><th>Enables</th><th>Cost</th></tr>
-        <tr><td>doc id only</td><td>Boolean AND/OR/NOT</td><td>smallest</td></tr>
-        <tr><td>+ term frequency</td><td>tf-idf / BM25 ranking</td><td>+1 small int</td></tr>
-        <tr><td>+ positions</td><td>phrase and proximity queries</td><td>one int per occurrence</td></tr>
-        <tr><td>+ offsets</td><td>highlighting snippets</td><td>more</td></tr>
-      </table>
-    </div>
-    <div class="box plain">
-      <span class="label">Document ids</span>
-      <ul class="xsmall">
-        <li>Internal ids are dense integers assigned at indexing time, separate from external ids (URLs, ticket numbers)</li>
-        <li>Posting lists are kept <strong>sorted by id</strong> — this is what makes intersection linear and compression effective</li>
-        <li>Monotonic id assignment turns insertion into an append</li>
-      </ul>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:35</span></p>
-    <h4>Teaching point</h4>
-    <p>"Every field in a posting multiplies across billions of postings. Deciding to store positions is deciding to roughly double or triple index size to support phrase search. Is phrase search a requirement?" — requirements drive representation.</p>
-    <h4>Internal vs external ids</h4>
-    <p>External ids (a 36-char UUID, a URL) are large and unordered. Engines map them to dense 32-bit integers: postings become small, sorted and compressible (next part). Consequence: an id-mapping table must be maintained and must stay consistent with the index — an invariant.</p>
-    <h4>Our starter's choice</h4>
-    <p>Our code accepts arbitrary ids and uses sorted insertion (<code>lower_bound</code> + <code>insert</code>): correct, but O(list length) per insert when ids arrive out of order. With monotonic ids it is an append. Ask: "Who should assign ids — caller or index?" (The index, if you want the append property guaranteed.)</p>
-  </aside>
+<h2>What a posting contains</h2>
+<div class="cols small">
+<div>
+<table class="tight">
+<tr><th>Posting payload</th><th>Enables</th><th>Cost</th></tr>
+<tr><td>doc id only</td><td>Boolean AND/OR/NOT</td><td>smallest</td></tr>
+<tr><td>+ term frequency</td><td>tf-idf / BM25 ranking</td><td>+1 small int</td></tr>
+<tr><td>+ positions</td><td>phrase and proximity queries</td><td>one int per occurrence</td></tr>
+<tr><td>+ offsets</td><td>highlighting snippets</td><td>more</td></tr>
+</table>
+</div>
+<div class="box plain">
+<span class="label">Document ids</span>
+<ul class="xsmall">
+<li>Internal ids are dense integers assigned at indexing time, separate from external ids (URLs, ticket numbers)</li>
+<li>Posting lists are kept <strong>sorted by id</strong> — this is what makes intersection linear and compression effective</li>
+<li>Monotonic id assignment turns insertion into an append</li>
+</ul>
+</div>
+</div>
+
 </section>
-
 <section class="slide">
-  <h2>Boolean queries are set operations on sorted lists</h2>
-  <div class="cols">
-    <pre class="sm"><code>// AND: linear merge of two sorted lists
+<h2>Boolean queries are set operations on sorted lists</h2>
+<div class="cols">
+<pre class="sm"><code>// AND: linear merge of two sorted lists
 std::vector&lt;DocId&gt; out;
 std::size_t i = 0, j = 0;
 while (i &lt; a.size() &amp;&amp; j &lt; b.size()) {
@@ -241,368 +167,244 @@ while (i &lt; a.size() &amp;&amp; j &lt; b.size()) {
     else if (b[j] &lt; a[i]) ++j;
     else { out.push_back(a[i]); ++i; ++j; }
 }</code></pre>
-    <div class="small">
-      <ul>
-        <li><strong>AND</strong> = intersection, O(|a| + |b|)</li>
-        <li><strong>OR</strong> = union (merge), O(|a| + |b|)</li>
-        <li><strong>AND NOT</strong> = difference</li>
-        <li>Multi-term AND: start with the <strong>rarest</strong> term; the result can only shrink</li>
-        <li>|a| ≪ |b|: gallop / skip through b → O(|a| log |b|)</li>
-      </ul>
-    </div>
-  </div>
-  <div class="box q small"><span class="label">Ask</span>Why is a pure NOT query ("documents <em>without</em> 'error'") dangerous as an API?</div>
-  <aside class="notes">
-    <p><span class="t">00:42</span></p>
-    <h4>Note</h4>
-    <p>This slide shows the idea of TODO 1. That is intentional: the exercise is about getting it right, integrating it and measuring it, not about inventing the merge. If you prefer, show it only after the lab.</p>
-    <h4>Answer to the question</h4>
-    <p>A pure NOT returns almost the entire corpus: O(N) output, which is the scan again, and possibly millions of results. Most engines only allow NOT relative to a positive clause (<code>must</code> + <code>must_not</code>). Our API is <code>search_and_not(must, must_not)</code> for exactly this reason: the API shape prevents an expensive query.</p>
-    <h4>Rarest-first</h4>
-    <p>For "the AND stampede": start with "stampede" (3 postings), not "the" (millions). This needs the document frequency per term — one reason <code>document_frequency()</code> is public and cheap (it is the list length).</p>
-    <h4>Skip pointers / galloping</h4>
-    <p>When one list is tiny and the other huge, exponential search on the long list avoids reading most of it. Lucene uses skip lists inside compressed posting blocks. A conceptual mention is enough.</p>
-  </aside>
-</section>
+<div class="small">
+<ul>
+<li><strong>AND</strong> = intersection, O(|a| + |b|)</li>
+<li><strong>OR</strong> = union (merge), O(|a| + |b|)</li>
+<li><strong>AND NOT</strong> = difference</li>
+<li>Multi-term AND: start with the <strong>rarest</strong> term; the result can only shrink</li>
+<li>|a| ≪ |b|: gallop / skip through b → O(|a| log |b|)</li>
+</ul>
+</div>
+</div>
+<div class="box q small"><span class="label">Ask</span>Why is a pure NOT query ("documents <em>without</em> 'error'") dangerous as an API?</div>
 
+</section>
 <section class="slide">
-  <h2>Ranking, just enough</h2>
-  <div class="cols small">
-    <div>
-      <p>Boolean matching says <em>which</em> documents; ranking says <em>which first</em>.</p>
-      <ul>
-        <li><strong>tf</strong> — how often the term occurs in the document</li>
-        <li><strong>df</strong> — how many documents contain it</li>
-        <li><strong>idf</strong> = log(N / df) — rare terms carry more signal</li>
-        <li>score(d, q) = Σ over terms (1 + log tf) · idf</li>
-      </ul>
-      <p class="xsmall muted">BM25 refines this with length normalisation and saturation. Not today.</p>
-    </div>
-    <div class="box warn">
-      <span class="label">Engineering consequences</span>
-      <ul class="xsmall">
-        <li>Ranking needs tf in postings and N, df at query time</li>
-        <li>After deletions, df and N are wrong until they are recomputed: scores drift</li>
-        <li>Top-k of a union can be answered without scoring every match (WAND, block-max) — the Lecture 4 lesson again</li>
-      </ul>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">00:50</span></p>
-    <h4>Keep it short</h4>
-    <p>This is not an IR course. Students need three ideas: tf, idf, and "statistics are part of the index state and can become stale".</p>
-    <h4>Stale statistics example</h4>
-    <p>Lucene marks deleted documents in a bitmap; df and collection statistics still count them until segments merge. Ranking is therefore slightly wrong right after mass deletions — a deliberate trade of exactness for update speed. Ask: "Is that acceptable for a support knowledge base? For a legal e-discovery system?"</p>
-    <h4>Transition</h4>
-    <p>"So far we have assumed a static corpus. Our scenario has 50 edits per minute. That is where the engineering really starts."</p>
-  </aside>
+<h2>Ranking, just enough</h2>
+<div class="cols small">
+<div>
+<p>Boolean matching says <em>which</em> documents; ranking says <em>which first</em>.</p>
+<ul>
+<li><strong>tf</strong> — how often the term occurs in the document</li>
+<li><strong>df</strong> — how many documents contain it</li>
+<li><strong>idf</strong> = log(N / df) — rare terms carry more signal</li>
+<li>score(d, q) = Σ over terms (1 + log tf) · idf</li>
+</ul>
+<p class="xsmall muted">BM25 refines this with length normalisation and saturation. Not today.</p>
+</div>
+<div class="box warn">
+<span class="label">Engineering consequences</span>
+<ul class="xsmall">
+<li>Ranking needs tf in postings and N, df at query time</li>
+<li>After deletions, df and N are wrong until they are recomputed: scores drift</li>
+<li>Top-k of a union can be answered without scoring every match (WAND, block-max) — the Lecture 4 lesson again</li>
+</ul>
+</div>
+</div>
+
 </section>
 
-<!-- ====================== PART 3 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 3 · 01:00–01:30</span>
-  <h1>What the index costs:<br>size, updates, freshness, consistency</h1>
+<span class="kicker">Part 3 · 01:00–01:30</span>
+<h1>What the index costs:<br/>size, updates, freshness, consistency</h1>
 </section>
-
 <section class="slide">
-  <h2>The bill for fast queries</h2>
-  <table class="small">
-    <tr><th>Cost</th><th>Where it comes from</th><th>Mitigation</th></tr>
-    <tr><td>Index size</td><td>Postings + dictionary + forward index + id map; often larger than the text</td><td>Compression, dropping positions/stop words</td></tr>
-    <tr><td>Build time</td><td>Analyse everything, sort, write</td><td>Parallel build, bulk sort-based construction</td></tr>
-    <tr><td>Update cost</td><td>One document touches ~hundreds of posting lists</td><td>Buffer updates; append new segments</td></tr>
-    <tr><td>Staleness</td><td>Buffered changes are not yet searchable</td><td>Refresh interval (e.g. 1 s)</td></tr>
-    <tr><td>Complexity</td><td>Two views (forward, inverted) that must agree</td><td>Invariants, rebuild tooling</td></tr>
-  </table>
-  <aside class="notes">
-    <p><span class="t">01:00</span></p>
-    <h4>Say</h4>
-    <p>"Queries got faster because we did work at write time. Every row here is part of that work, and each is paid in a different currency: memory, CPU, freshness, or engineering effort."</p>
-    <h4>Update amplification</h4>
-    <p>Adding one 400-word document with ~200 distinct terms touches ~200 posting lists. In-place insertion into 200 large sorted arrays is slow and fragments memory. That is why production engines do not update in place: they buffer and write immutable segments (next slide).</p>
-  </aside>
+<h2>The bill for fast queries</h2>
+<table class="small">
+<tr><th>Cost</th><th>Where it comes from</th><th>Mitigation</th></tr>
+<tr><td>Index size</td><td>Postings + dictionary + forward index + id map; often larger than the text</td><td>Compression, dropping positions/stop words</td></tr>
+<tr><td>Build time</td><td>Analyse everything, sort, write</td><td>Parallel build, bulk sort-based construction</td></tr>
+<tr><td>Update cost</td><td>One document touches ~hundreds of posting lists</td><td>Buffer updates; append new segments</td></tr>
+<tr><td>Staleness</td><td>Buffered changes are not yet searchable</td><td>Refresh interval (e.g. 1 s)</td></tr>
+<tr><td>Complexity</td><td>Two views (forward, inverted) that must agree</td><td>Invariants, rebuild tooling</td></tr>
+</table>
+
 </section>
-
 <section class="slide">
-  <h2>Incremental indexing: immutable segments</h2>
-  <div class="cols wide-r">
-    <div class="small">
-      <ul>
-        <li>New documents go to an in-memory buffer</li>
-        <li><strong>Refresh</strong>: buffer → small immutable segment → searchable</li>
-        <li>Queries search all segments and merge results</li>
-        <li>Delete = mark in a bitmap (a tombstone, as in L2)</li>
-        <li><strong>Merge</strong>: combine small segments in the background, dropping deleted docs</li>
-      </ul>
-    </div>
-    <svg viewBox="0 0 560 290">
-      <g font-size="15" font-family="Segoe UI, Arial">
-        <rect x="10" y="20" width="160" height="50" rx="6" fill="#fff4e0" stroke="#9a5b00"/><text x="22" y="50">write buffer</text>
-        <text x="190" y="50" fill="#9a5b00">refresh →</text>
-        <rect x="290" y="20" width="70" height="50" fill="#e3f1f2" stroke="#0b6e75"/><text x="302" y="50">seg 7</text>
-        <rect x="370" y="20" width="70" height="50" fill="#e3f1f2" stroke="#0b6e75"/><text x="382" y="50">seg 8</text>
-        <rect x="450" y="20" width="70" height="50" fill="#e3f1f2" stroke="#0b6e75"/><text x="462" y="50">seg 9</text>
-        <rect x="290" y="130" width="230" height="60" fill="#e3f1f2" stroke="#14304a" stroke-width="2"/><text x="330" y="165">merged segment</text>
-        <path d="M405,75 L405,125" stroke="#14304a" stroke-width="2" marker-end="url(#ar5b)"/>
-        <text x="415" y="105" fill="#46505e">background merge</text>
-        <text x="10" y="240" fill="#46505e">Search = query every segment, skip deleted, merge</text>
-        <text x="10" y="266" fill="#46505e">Same idea as LSM trees in storage engines</text>
-        <defs><marker id="ar5b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0L10,5L0,10z" fill="#14304a"/></marker></defs>
-      </g>
-    </svg>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:06</span></p>
-    <h4>Why immutable segments</h4>
-    <ul>
-      <li>Writes become sequential appends; no in-place edits of huge sorted arrays.</li>
-      <li>Readers never see a half-updated structure — concurrency becomes much simpler (readers hold a snapshot of the segment list).</li>
-      <li>Segments compress well and can be memory-mapped.</li>
-    </ul>
-    <h4>Costs</h4>
-    <p>Query cost grows with the number of segments (merge policy bounds it), merges consume I/O and CPU in the background, deleted documents occupy space until merged, and statistics (df) include deleted docs until then. Lucene/Elasticsearch work this way; Elasticsearch's default refresh interval of 1 s is exactly the "near-real-time" freshness window.</p>
-    <h4>Connect forward</h4>
-    <p>Lecture 9 (persistent/versioned structures) returns to "immutability simplifies reasoning but shifts cost to storage and compaction".</p>
-  </aside>
+<h2>Incremental indexing: immutable segments</h2>
+<div class="cols wide-r">
+<div class="small">
+<ul>
+<li>New documents go to an in-memory buffer</li>
+<li><strong>Refresh</strong>: buffer → small immutable segment → searchable</li>
+<li>Queries search all segments and merge results</li>
+<li>Delete = mark in a bitmap (a tombstone, as in L2)</li>
+<li><strong>Merge</strong>: combine small segments in the background, dropping deleted docs</li>
+</ul>
+</div>
+<svg viewbox="0 0 560 290">
+<g font-family="Segoe UI, Arial" font-size="15">
+<rect fill="#fff4e0" height="50" rx="6" stroke="#9a5b00" width="160" x="10" y="20"></rect><text x="22" y="50">write buffer</text>
+<text fill="#9a5b00" x="190" y="50">refresh →</text>
+<rect fill="#e3f1f2" height="50" stroke="#0b6e75" width="70" x="290" y="20"></rect><text x="302" y="50">seg 7</text>
+<rect fill="#e3f1f2" height="50" stroke="#0b6e75" width="70" x="370" y="20"></rect><text x="382" y="50">seg 8</text>
+<rect fill="#e3f1f2" height="50" stroke="#0b6e75" width="70" x="450" y="20"></rect><text x="462" y="50">seg 9</text>
+<rect fill="#e3f1f2" height="60" stroke="#14304a" stroke-width="2" width="230" x="290" y="130"></rect><text x="330" y="165">merged segment</text>
+<path d="M405,75 L405,125" marker-end="url(#ar5b)" stroke="#14304a" stroke-width="2"></path>
+<text fill="#46505e" x="415" y="105">background merge</text>
+<text fill="#46505e" x="10" y="240">Search = query every segment, skip deleted, merge</text>
+<text fill="#46505e" x="10" y="266">Same idea as LSM trees in storage engines</text>
+<defs><marker id="ar5b" markerheight="8" markerwidth="8" orient="auto" refx="9" refy="5" viewbox="0 0 10 10"><path d="M0,0L10,5L0,10z" fill="#14304a"></path></marker></defs>
+</g>
+</svg>
+</div>
+
 </section>
-
 <section class="slide">
-  <h2>Contract questions for <code>updateDocument</code></h2>
-  <div class="cols small">
-    <pre class="sm"><code>bool add_document(DocId id, string_view text);
+<h2>Contract questions for <code>updateDocument</code></h2>
+<div class="cols small">
+<pre class="sm"><code>bool add_document(DocId id, string_view text);
 bool remove_document(DocId id);
 bool update_document(DocId id, string_view text);
 std::vector&lt;DocId&gt; search_and(string_view q) const;
 std::size_t document_frequency(string_view t) const;</code></pre>
-    <div class="box q">
-      <span class="label">Pairs · 5 min</span>
-      <ol class="xsmall">
-        <li>When does a newly added document become searchable?</li>
-        <li>Is update atomic? Can a query see neither the old nor the new version?</li>
-        <li>What if the process dies halfway through an update?</li>
-        <li>Is search strongly consistent with the database of record?</li>
-        <li>What does <code>false</code> mean for each call?</li>
-      </ol>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:12</span></p>
-    <h4>Expected answers (our in-memory implementation)</h4>
-    <ol>
-      <li>Immediately on return (single-threaded, no buffer). In a segment-based engine: after the next refresh — "eventually, within ~1 s". The contract must say which.</li>
-      <li>Our <code>update_document</code> = remove + add. A concurrent reader between the two steps sees <em>no</em> version. We avoid this only by declaring the component single-threaded. With segments: add new version, mark old deleted, publish both in one refresh → atomic from the reader's view.</li>
-      <li>In memory: a crash loses the index entirely — rebuild from the source of truth. That is a valid design, if rebuild time is acceptable (measure it!). Persistent engines use a write-ahead log (transaction log) to replay unflushed changes.</li>
-      <li>No. The index is a <em>derived</em> view of the documents database, updated after the database commits. There is always a window where they differ. Typical contract: "search is eventually consistent; the document page reads the database".</li>
-      <li><code>add</code> false = id exists; <code>remove</code>/<code>update</code> false = id absent. Normal outcomes, not errors (Lecture 1).</li>
-    </ol>
-    <h4>Partial failure across systems</h4>
-    <p>DB write succeeds, index update fails → search is stale for that document forever unless something re-drives it. Patterns: an outbox table / change-data-capture stream that the indexer consumes (at-least-once, so indexing must be idempotent — Lecture 8), plus a periodic reconciliation or full rebuild.</p>
-  </aside>
-</section>
+<div class="box q">
+<span class="label">Pairs · 5 min</span>
+<ol class="xsmall">
+<li>When does a newly added document become searchable?</li>
+<li>Is update atomic? Can a query see neither the old nor the new version?</li>
+<li>What if the process dies halfway through an update?</li>
+<li>Is search strongly consistent with the database of record?</li>
+<li>What does <code>false</code> mean for each call?</li>
+</ol>
+</div>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Invariants of an inverted index</h2>
-  <div class="cols small">
-    <ol>
-      <li>Every posting refers to a live document</li>
-      <li>Posting lists are strictly increasing by doc id: sorted, no duplicates</li>
-      <li>Forward and inverted views agree: <em>t</em> ∈ terms(<em>d</em>) ⇔ <em>d</em> ∈ postings(<em>t</em>)</li>
-      <li>No empty posting lists remain in the dictionary</li>
-      <li>Document metadata (lengths, N) matches the indexed set</li>
-    </ol>
-    <div class="box key">
-      <span class="label">Where bugs come from</span>
-      <ul class="xsmall">
-        <li>Update adds new postings but forgets to remove old ones → a document matches words it no longer contains</li>
-        <li>Re-adding an id already present → duplicate postings, double-counted tf and df</li>
-        <li>Removing without the forward index → dangling postings</li>
-      </ul>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:20</span></p>
-    <h4>Say</h4>
-    <p>"<code>check_invariants()</code> in your starter checks all five. It is O(size of the index): fine in tests, not in production. In production, the equivalent is a periodic consistency job comparing the index with the database."</p>
-    <h4>Ask</h4>
-    <p>"Which invariant, if broken, would a user notice first? Which would nobody notice for months?" Expected: #3 violated by a stale update is visible (wrong results); #5 (N, doc lengths) silently skews ranking — nobody files a bug about slightly worse ranking. Silent degradation again (L3's B1).</p>
-    <h4>Transition to break</h4>
-    <p>"After the break you will implement the two pieces that keep invariants 2 and 3 true: intersection and removal."</p>
-  </aside>
+<h2>Invariants of an inverted index</h2>
+<div class="cols small">
+<ol>
+<li>Every posting refers to a live document</li>
+<li>Posting lists are strictly increasing by doc id: sorted, no duplicates</li>
+<li>Forward and inverted views agree: <em>t</em> ∈ terms(<em>d</em>) ⇔ <em>d</em> ∈ postings(<em>t</em>)</li>
+<li>No empty posting lists remain in the dictionary</li>
+<li>Document metadata (lengths, N) matches the indexed set</li>
+</ol>
+<div class="box key">
+<span class="label">Where bugs come from</span>
+<ul class="xsmall">
+<li>Update adds new postings but forgets to remove old ones → a document matches words it no longer contains</li>
+<li>Re-adding an id already present → duplicate postings, double-counted tf and df</li>
+<li>Removing without the forward index → dangling postings</li>
+</ul>
+</div>
+</div>
+
+</section>
+<section class="slide divider">
+<span class="kicker">01:30–01:40</span>
+<h1>Break — 10 minutes</h1>
+<p>Download <code>Lecture_05/Student_Resources/</code> · Build <code>index_test.cpp</code> once</p>
 </section>
 
 <section class="slide divider">
-  <span class="kicker">01:30–01:40</span>
-  <h1>Break — 10 minutes</h1>
-  <p>Download <code>Lecture_05/Student_Resources/</code> · Build <code>index_test.cpp</code> once</p>
+<span class="kicker">Part 4 · 01:40–02:20</span>
+<h1>Hands-on: finish the index,<br/>then predict its cost</h1>
+</section>
+<section class="slide">
+<h2>Lab brief (pairs)</h2>
+<div class="cols wide-l small">
+<div>
+<h3>A. Implement (≈ 20 min)</h3>
+<ol>
+<li><strong>TODO 1</strong> <code>intersect()</code> — sorted merge, O(|a| + |b|)</li>
+<li><strong>TODO 2</strong> <code>remove_document()</code> — all invariants must still hold</li>
+<li>Run <code>index_test.cpp</code>: contract tests + differential test against <code>LinearScan</code></li>
+</ol>
+<h3>B. Hypothesis (≈ 10 min, before running anything)</h3>
+<p>Fill the table in <code>EXERCISE.md</code>: build time, memory and query latency of scan vs index at 1k / 10k / 50k documents, for rare and for common terms.</p>
+</div>
+<div class="box plain xsmall">
+<span class="label">Build</span>
+<code>g++ -std=c++20 -O1 -g index_test.cpp</code><br/><code>g++ -std=c++20 -O2 index_bench.cpp</code><br/><br/>
+<span class="label">Try the demo</span>
+<code>./demo "posting lists" "cache lru"</code>
+</div>
+</div>
+
 </section>
 
-<!-- ====================== PART 4 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 4 · 01:40–02:20</span>
-  <h1>Hands-on: finish the index,<br>then predict its cost</h1>
+<span class="kicker">Part 5 · 02:20–02:45</span>
+<h1>Experiment: faster — at what price?</h1>
 </section>
-
 <section class="slide">
-  <h2>Lab brief (pairs)</h2>
-  <div class="cols wide-l small">
-    <div>
-      <h3>A. Implement (≈ 20 min)</h3>
-      <ol>
-        <li><strong>TODO 1</strong> <code>intersect()</code> — sorted merge, O(|a| + |b|)</li>
-        <li><strong>TODO 2</strong> <code>remove_document()</code> — all invariants must still hold</li>
-        <li>Run <code>index_test.cpp</code>: contract tests + differential test against <code>LinearScan</code></li>
-      </ol>
-      <h3>B. Hypothesis (≈ 10 min, before running anything)</h3>
-      <p>Fill the table in <code>EXERCISE.md</code>: build time, memory and query latency of scan vs index at 1k / 10k / 50k documents, for rare and for common terms.</p>
-    </div>
-    <div class="box plain xsmall">
-      <span class="label">Build</span>
-      <code>g++ -std=c++20 -O1 -g index_test.cpp</code><br><code>g++ -std=c++20 -O2 index_bench.cpp</code><br><br>
-      <span class="label">Try the demo</span>
-      <code>./demo "posting lists" "cache lru"</code>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">01:40</span></p>
-    <h4>Run it</h4>
-    <p>Most pairs finish TODO 1 in 5–10 minutes. TODO 2 is where the thinking is. Circulate and ask each pair: "How do you know which posting lists contain doc 17?" If they loop over the whole vocabulary, it works but is O(vocabulary); point them to <code>forward_</code>.</p>
-    <h4>Common bugs to watch for</h4>
-    <ul>
-      <li>Intersection that pushes duplicates when both lists contain an id twice (impossible if invariant 2 holds — good discussion: code relies on invariants).</li>
-      <li>Removal that leaves empty posting lists → invariant 4 fails, and <code>document_frequency</code> is still right but the vocabulary grows forever.</li>
-      <li>Forgetting <code>doc_len_</code> → invariant 5.</li>
-      <li>Erasing from <code>postings_</code> while holding an iterator into it: fine for <code>unordered_map::erase(it)</code> on that element only.</li>
-    </ul>
-    <h4>Solution</h4>
-    <p><code>Instructor_Only/Lecture_05/inverted_index_solution.hpp</code>. The differential test uses non-monotonic ids so sorted insertion is exercised.</p>
-    <h4>Hypothesis</h4>
-    <p><span class="t">02:05</span> Insist every pair writes numbers (orders of magnitude are fine) before they see the results. Collect two or three predictions aloud for the 50k row.</p>
-  </aside>
+<h2>Results</h2>
+<table class="tight small">
+<tr><th>Docs</th><th>Design</th><th class="num">Build ms</th><th class="num">Heap MB</th><th class="num">rare</th><th class="num">common</th><th class="num">2 common</th><th class="num">all: median</th><th class="num">all: p90</th></tr>
+<tr><td>1,000</td><td>scan</td><td class="num">0.2</td><td class="num">0.3</td><td class="num">3,302</td><td class="num">3,265</td><td class="num">3,287</td><td class="num">3,337</td><td class="num">4,000</td></tr>
+<tr><td></td><td>index</td><td class="num">16</td><td class="num">3.0</td><td class="num">0.3</td><td class="num">0.9</td><td class="num">4.3</td><td class="num">0.9</td><td class="num">4.3</td></tr>
+<tr><td>10,000</td><td>scan</td><td class="num">2.0</td><td class="num">3.2</td><td class="num">34,197</td><td class="num">33,705</td><td class="num">34,906</td><td class="num">34,418</td><td class="num">36,223</td></tr>
+<tr><td></td><td>index</td><td class="num">139</td><td class="num">27</td><td class="num">0.5</td><td class="num">4.2</td><td class="num">41</td><td class="num">5.0</td><td class="num">37</td></tr>
+<tr class="hl"><td>50,000</td><td>scan</td><td class="num">11</td><td class="num">15.5</td><td class="num">172,354</td><td class="num">171,033</td><td class="num">179,295</td><td class="num">173,541</td><td class="num">183,058</td></tr>
+<tr class="hl"><td></td><td>index</td><td class="num">720</td><td class="num">134</td><td class="num">1.0</td><td class="num">25</td><td class="num">210</td><td class="num">25</td><td class="num">205</td></tr>
+</table>
+<p class="xsmall muted" style="margin-top:8px">Query latency in µs: median per query over one prepared 48-query workload (rare / common single terms, 2- and 3-term ANDs; not all classes shown) × 3 repetitions, same sequence for both designs, answers checked identical. Heap = live payload bytes of <em>these components as implemented</em>: the scan stores the original text; the index stores postings and term lists but not the text. One laptop, MinGW g++ 15 -O2.</p>
+
+</section>
+<section class="slide">
+<h2>Debrief: the questions that matter</h2>
+<div class="cols small">
+<div>
+<div class="box q"><span class="label">1</span>What did the speed cost? Build time, memory, update path, a second view to keep consistent.</div>
+<div class="box q"><span class="label">2</span>When would you still ship the scan?</div>
+</div>
+<div>
+<div class="box q"><span class="label">3</span>Why are common terms still slow, and what would you do about it?</div>
+<div class="box q"><span class="label">4</span>What does this experiment <strong>not</strong> show?</div>
+</div>
+</div>
+
+</section>
+<section class="slide">
+<h2>Testing an index</h2>
+<table class="small">
+<tr><th>Technique</th><th>Catches</th></tr>
+<tr><td>Differential vs <code>LinearScan</code> (small vocabulary, random add/remove)</td><td>Wrong intersection, stale postings after update/remove</td></tr>
+<tr><td><code>check_invariants()</code> after every mutation</td><td>Dangling postings, duplicates, forward/inverted disagreement</td></tr>
+<tr><td>Non-monotonic document ids</td><td>Sorted-insertion bugs hidden by append-only tests</td></tr>
+<tr><td>Analyzer tests (case, punctuation, stop words, Unicode)</td><td>Index/query mismatch</td></tr>
+<tr><td>Rebuild equivalence: incremental index = index rebuilt from scratch</td><td>Drift in long-running incremental indexes</td></tr>
+</table>
+
 </section>
 
-<!-- ====================== PART 5 ====================== -->
 <section class="slide divider">
-  <span class="kicker">Part 5 · 02:20–02:45</span>
-  <h1>Experiment: faster — at what price?</h1>
+<span class="kicker">Part 6 · 02:45–03:00</span>
+<h1>Project: what is your index?</h1>
 </section>
-
 <section class="slide">
-  <h2>Results</h2>
-  <table class="tight small">
-    <tr><th>Docs</th><th>Design</th><th class="num">Build ms</th><th class="num">Heap MB</th><th class="num">rare</th><th class="num">common</th><th class="num">2 common</th><th class="num">all: median</th><th class="num">all: p90</th></tr>
-    <tr><td>1,000</td><td>scan</td><td class="num">0.2</td><td class="num">0.3</td><td class="num">3,302</td><td class="num">3,265</td><td class="num">3,287</td><td class="num">3,337</td><td class="num">4,000</td></tr>
-    <tr><td></td><td>index</td><td class="num">16</td><td class="num">3.0</td><td class="num">0.3</td><td class="num">0.9</td><td class="num">4.3</td><td class="num">0.9</td><td class="num">4.3</td></tr>
-    <tr><td>10,000</td><td>scan</td><td class="num">2.0</td><td class="num">3.2</td><td class="num">34,197</td><td class="num">33,705</td><td class="num">34,906</td><td class="num">34,418</td><td class="num">36,223</td></tr>
-    <tr><td></td><td>index</td><td class="num">139</td><td class="num">27</td><td class="num">0.5</td><td class="num">4.2</td><td class="num">41</td><td class="num">5.0</td><td class="num">37</td></tr>
-    <tr class="hl"><td>50,000</td><td>scan</td><td class="num">11</td><td class="num">15.5</td><td class="num">172,354</td><td class="num">171,033</td><td class="num">179,295</td><td class="num">173,541</td><td class="num">183,058</td></tr>
-    <tr class="hl"><td></td><td>index</td><td class="num">720</td><td class="num">134</td><td class="num">1.0</td><td class="num">25</td><td class="num">210</td><td class="num">25</td><td class="num">205</td></tr>
-  </table>
-  <p class="xsmall muted" style="margin-top:8px">Query latency in µs: median per query over one prepared 48-query workload (rare / common single terms, 2- and 3-term ANDs; not all classes shown) × 3 repetitions, same sequence for both designs, answers checked identical. Heap = live payload bytes of <em>these components as implemented</em>: the scan stores the original text; the index stores postings and term lists but not the text. One laptop, MinGW g++ 15 -O2.</p>
-  <aside class="notes">
-    <p><span class="t">02:20</span> Run <code>./bench</code> live if possible (~30 s).</p>
-    <h4>Methodology first (say it before the numbers)</h4>
-    <p>"Both designs answer exactly the same 48 queries, in the same shuffled order, three times. Every query is timed on its own and we report medians per query class. We also check that the answers are identical — a benchmark of two implementations that disagree measures nothing." An earlier version of this benchmark repeated three queries 100 times on the index side only; that flatters the index (hot caches) and measures a different workload from the scan. Tell students this: it is a good example of a subtle benchmark bias.</p>
-    <h4>Read the table with them (50,000 documents)</h4>
-    <ul>
-      <li>Speedup depends on the query: ~170,000× for a rare term, ~6,900× for a common single term, ~850× for an AND of two common terms. The <strong>overall median is ~7,000×</strong>. Quote the distribution, not the best number.</li>
-      <li>Price: build ~64× slower than just storing the text (720 vs 11 ms); memory ~8.6× (134 vs 15.5 MB) — for these components as implemented.</li>
-      <li>Inside the index, common-term ANDs are ~200× slower than rare-term queries: long posting lists (Zipf). The index makes cost proportional to the lists touched, not constant.</li>
-      <li>Rare-term timings near 1 µs are close to timer resolution; treat them as "about 1 µs", not as precise values.</li>
-    </ul>
-    <h4>What the memory numbers do and do not say</h4>
-    <p>The scan component holds only the raw text. The index component holds postings, a forward list of term strings per document and metadata, but <em>not</em> the text — a real system keeps the text as well (for display and re-indexing), so its total storage would be text + index. Our representation is also deliberately naive (hash map of vectors, 8-byte postings, duplicated term strings). Production indexes compress postings (delta + variable-length integers) and are often smaller than the text. Ask: "Which of these rows would compression change?" (memory yes, rare-query latency barely, build time up.)</p>
-  </aside>
-</section>
+<h2>Five questions for your design document</h2>
+<div class="cols small">
+<ol>
+<li>What is your equivalent of an index — what work are you <strong>precomputing</strong>?</li>
+<li>What maintenance cost does it introduce on every write?</li>
+<li>Are you optimising reads by making writes more expensive? Is your read/write ratio known?</li>
+<li>What consistency promise are you making — when does a change become visible?</li>
+<li>What happens after a crash — rebuild, replay, or lose data? How long does it take?</li>
+</ol>
+<div class="box key">
+<span class="label">Deadline</span>
+<strong>Architecture / design / API document — Sat 31 Oct 2026, 23:59 Cairo</strong><br/><span class="xsmall">Template: <code>03_Project/templates/design_document_template.md</code>. Next Saturday ends with a design-document clinic.</span>
+</div>
+</div>
 
+</section>
 <section class="slide">
-  <h2>Debrief: the questions that matter</h2>
-  <div class="cols small">
-    <div>
-      <div class="box q"><span class="label">1</span>What did the speed cost? Build time, memory, update path, a second view to keep consistent.</div>
-      <div class="box q"><span class="label">2</span>When would you still ship the scan?</div>
-    </div>
-    <div>
-      <div class="box q"><span class="label">3</span>Why are common terms still slow, and what would you do about it?</div>
-      <div class="box q"><span class="label">4</span>What does this experiment <strong>not</strong> show?</div>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">02:28</span></p>
-    <h4>Expected answers</h4>
-    <ol>
-      <li>See the results slide; plus code complexity and new failure modes (index out of sync with the source).</li>
-      <li><strong>When the scan wins:</strong> small collections (at 500–1,000 docs the scan costs a few ms per query — acceptable for an admin page); very high write rates with rare queries (log data searched once a day → grep the files); ad-hoc queries the index cannot answer (regular expressions, substrings inside words); strict freshness requirements where any index lag is unacceptable and the data is small. Simplicity, no build cost and no synchronisation are real benefits. Asymptotic superiority does not automatically justify operational complexity.</li>
-      <li>Long posting lists. Options: stop words; start with the rarest term (already done); skip lists/galloping; ranked retrieval that stops after the top-k (WAND); caching results for popular queries (L3!).</li>
-      <li>Not shown: real text and query logs (Zipf synthetic only; 48 queries is a small workload), updates and deletes under load, tail latency under concurrent load (we report medians and a p90 over only 144 samples), memory after compression, the text storage a real system also needs, multi-segment behaviour, concurrency, disk-resident indexes, other machines and compilers.</li>
-    </ol>
-    <h4>Teaching point</h4>
-    <p>"'Faster search' is not a result. 'a median ~7,000× faster query (from ~850× to ~170,000× depending on the query class) for ~8.6× memory and ~64× build time, at 50k documents, on synthetic data' is a result — and it comes with a list of what it does not show."</p>
-  </aside>
-</section>
+<h2>Summary</h2>
+<ol>
+<li>A linear scan's cost grows with the corpus; an index makes cost proportional to the posting lists touched.</li>
+<li>The analyzer defines what "match" means and must be identical at index and query time.</li>
+<li>Sorted postings make AND/OR linear merges; start with the rarest term.</li>
+<li>The index is precomputed work: pay in memory, build time, update complexity and freshness.</li>
+<li>Immutable segments + merge make updates and concurrency manageable, at the cost of background work.</li>
+<li>Specify when changes become searchable, and what happens on partial failure.</li>
+</ol>
+<p class="small muted">Next: Lecture 6 · Sat 31 Oct — Range Queries and Workload-Driven Design · <strong>Design document due 31 Oct</strong>.</p>
 
-<section class="slide">
-  <h2>Testing an index</h2>
-  <table class="small">
-    <tr><th>Technique</th><th>Catches</th></tr>
-    <tr><td>Differential vs <code>LinearScan</code> (small vocabulary, random add/remove)</td><td>Wrong intersection, stale postings after update/remove</td></tr>
-    <tr><td><code>check_invariants()</code> after every mutation</td><td>Dangling postings, duplicates, forward/inverted disagreement</td></tr>
-    <tr><td>Non-monotonic document ids</td><td>Sorted-insertion bugs hidden by append-only tests</td></tr>
-    <tr><td>Analyzer tests (case, punctuation, stop words, Unicode)</td><td>Index/query mismatch</td></tr>
-    <tr><td>Rebuild equivalence: incremental index = index rebuilt from scratch</td><td>Drift in long-running incremental indexes</td></tr>
-  </table>
-  <aside class="notes">
-    <p><span class="t">02:38</span></p>
-    <h4>Point out the last row</h4>
-    <p>"Rebuild equivalence" is the strongest test for any incrementally maintained structure: apply a long random sequence of updates, then rebuild from the final documents, and compare the two indexes (or their query results). It catches exactly the update-path bugs that example-based tests miss. It applies to many projects (caches with invalidation, materialised views, aggregates).</p>
-  </aside>
 </section>
-
-<!-- ====================== PART 6 ====================== -->
-<section class="slide divider">
-  <span class="kicker">Part 6 · 02:45–03:00</span>
-  <h1>Project: what is your index?</h1>
-</section>
-
-<section class="slide">
-  <h2>Five questions for your design document</h2>
-  <div class="cols small">
-    <ol>
-      <li>What is your equivalent of an index — what work are you <strong>precomputing</strong>?</li>
-      <li>What maintenance cost does it introduce on every write?</li>
-      <li>Are you optimising reads by making writes more expensive? Is your read/write ratio known?</li>
-      <li>What consistency promise are you making — when does a change become visible?</li>
-      <li>What happens after a crash — rebuild, replay, or lose data? How long does it take?</li>
-    </ol>
-    <div class="box key">
-      <span class="label">Deadline</span>
-      <strong>Architecture / design / API document — Sat 31 Oct 2026, 23:59 Cairo</strong><br><span class="xsmall">Template: <code>03_Project/templates/design_document_template.md</code>. Next Saturday ends with a design-document clinic.</span>
-    </div>
-  </div>
-  <aside class="notes">
-    <p><span class="t">02:45</span></p>
-    <h4>Activity (8 minutes)</h4>
-    <p>Teams answer questions 1–3 for their own project in writing, then two teams share. Almost every project has an "index": a cache's lookup map, a trie's cached top-k, a Bloom filter in front of storage, a precomputed prefix sum, a reverse dependency map.</p>
-    <h4>Push</h4>
-    <p>If a team says "we have no write path", ask how their data gets loaded and how long a rebuild takes — that is their write path.</p>
-    <h4>Reminder</h4>
-    <p>Midterm on Sat 7 Nov covers Weeks 1–6; today's material is in scope. Permitted Materials: Closed book; no notes permitted.</p>
-  </aside>
-</section>
-
-<section class="slide">
-  <h2>Summary</h2>
-  <ol>
-    <li>A linear scan's cost grows with the corpus; an index makes cost proportional to the posting lists touched.</li>
-    <li>The analyzer defines what "match" means and must be identical at index and query time.</li>
-    <li>Sorted postings make AND/OR linear merges; start with the rarest term.</li>
-    <li>The index is precomputed work: pay in memory, build time, update complexity and freshness.</li>
-    <li>Immutable segments + merge make updates and concurrency manageable, at the cost of background work.</li>
-    <li>Specify when changes become searchable, and what happens on partial failure.</li>
-  </ol>
-  <p class="small muted">Next: Lecture 6 · Sat 31 Oct — Range Queries and Workload-Driven Design · <strong>Design document due 31 Oct</strong>.</p>
-  <aside class="notes"><p>Exit question: "Name one query your index would answer badly, and one workload where you would keep the scan."</p></aside>
-</section>
-
 <script src="../common/slides.js"></script>
 </body>
 </html>
